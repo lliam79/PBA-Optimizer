@@ -254,6 +254,7 @@
                                 <option value="bfd">Best Fit Decreasing (BFD)</option>
                                 <option value="ffd">First Fit Decreasing (FFD)</option>
                                 <option value="largest">Longest First (Descending)</option>
+                                <option value="longest_stock">Longest Stock First (LSF)</option>
                             </select>
                             <p class="text-xs text-slate-400">Packs members into tightest fitting stock.</p>
                         </div>
@@ -319,6 +320,10 @@
                         <button onclick="exportExcelSchedule()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-emerald-600/20">
                             <i class="fa-solid fa-file-excel"></i>
                             <span>Download Excel Schedule (.xlsx)</span>
+                        </button>
+                        <button onclick="printConsolidatedStockDraw()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-indigo-600/20">
+                            <i class="fa-solid fa-print"></i>
+                            <span>Print Stock Draw</span>
                         </button>
                     </div>
                 </div>
@@ -1160,14 +1165,18 @@
 
                     if (!placed) {
                         let chosenStock = activeStocks[activeStocks.length - 1];
-                        for (let i = activeStocks.length - 1; i >= 0; i--) {
-                            if (activeStocks[i] >= member.lengthNormalized) {
-                                chosenStock = activeStocks[i];
-                                break;
-                            }
-                        }
-                        if (member.lengthNormalized > chosenStock) {
+                        if (strategy === 'longest_stock') {
                             chosenStock = activeStocks[0];
+                        } else {
+                            for (let i = activeStocks.length - 1; i >= 0; i--) {
+                                if (activeStocks[i] >= member.lengthNormalized) {
+                                    chosenStock = activeStocks[i];
+                                    break;
+                                }
+                            }
+                            if (member.lengthNormalized > chosenStock) {
+                                chosenStock = activeStocks[0];
+                            }
                         }
 
                         bins.push({
@@ -1449,6 +1458,132 @@
                 showToast("Failed to generate Excel export.", 'error');
             }
         }
-    </script>
+    
+        // Print Consolidated Stock Draw
+        function printConsolidatedStockDraw() {
+            if (!optimizationResult) {
+                showToast("Please run the optimizer first before printing stock draw.", 'error');
+                return;
+            }
+
+            let printWindow = window.open('', '_blank');
+            let htmlContent = `
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Consolidated Stock Draw Report - PBA Optimizer</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; color: #111; }
+                        h1 { font-size: 20px; margin-bottom: 5px; }
+                        p { font-size: 12px; color: #555; margin-bottom: 20px; }
+                        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
+                        th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+                        th { background-color: #f4f4f4; }
+                        .text-right { text-align: right; }
+                        .text-center { text-align: center; }
+                        @media print {
+                            button { display: none; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>PBA OPTIMIZER - CONSOLIDATED STOCK DRAW REPORT</h1>
+                    <p>Project File: ${currentFileName} | Generated: ${new Date().toLocaleString()}</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Material / Grade</th>
+                                <th class="text-center">Total Boards</th>
+                                <th class="text-right">Stock Length (mm)</th>
+                                <th class="text-right">Total Stock Length (m)</th>
+                                <th class="text-right">Total Cut Length (m)</th>
+                                <th class="text-right">Reusable Stock (m)</th>
+                                <th class="text-right">Waste (m)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            Object.keys(optimizationResult.summary).forEach(mat => {
+                const s = optimizationResult.summary[mat];
+                let stockBreakdown = {};
+                optimizationResult.boards.filter(b => b.material === mat).forEach(b => {
+                    stockBreakdown[b.stockLength] = (stockBreakdown[b.stockLength] || 0) + 1;
+                });
+
+                Object.keys(stockBreakdown).sort((a,b)=>b-a).forEach(stockLen => {
+                    let count = stockBreakdown[stockLen];
+                    let stockM = ((count * Number(stockLen)) / 1000).toFixed(2);
+                    htmlContent += `
+                        <tr>
+                            <td><strong>${mat}</strong></td>
+                            <td class="text-center">${count}</td>
+                            <td class="text-right">${stockLen} mm</td>
+                            <td class="text-right">${stockM} m</td>
+                            <td class="text-right">-</td>
+                            <td class="text-right">-</td>
+                            <td class="text-right">-</td>
+                        </tr>
+                    `;
+                });
+            });
+
+            htmlContent += `
+                        </tbody>
+                    </table>
+                    
+                    <h3>Returned Reusable Stock (Offcuts >= Max Waste Threshold)</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Material</th>
+                                <th class="text-center">Board #</th>
+                                <th class="text-right">Offcut Length (mm)</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            if (optimizationResult.reusableOffcuts.length === 0) {
+                htmlContent += `<tr><td colspan="4" style="text-align: center; color: #777;">No reusable offcuts generated.</td></tr>`;
+            } else {
+                optimizationResult.reusableOffcuts.forEach(o => {
+                    htmlContent += `
+                        <tr>
+                            <td>${o.material}</td>
+                            <td class="text-center">Board #${o.boardIndex}</td>
+                            <td class="text-right">${o.length} mm</td>
+                            <td>Reusable Stock</td>
+                        </tr>
+                    `;
+                });
+            }
+
+            htmlContent += `
+                        </tbody>
+                    </table>
+                    <br>
+                    <button onclick="window.print()" style="padding: 10px 20px; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 10px;">Print Report</button>
+                    <button onclick="window.close()" style="padding: 10px 20px; background: #475569; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Close</button>
+                    <script>
+                        window.onload = function() {
+                            setTimeout(function() {
+                                window.print();
+                            }, 300);
+                        };
+                    <\/script>
+                </body>
+                </html>
+            `;
+
+            printWindow.document.write(htmlContent);
+            printWindow.document.close();
+            printWindow.focus();
+        }
+
+</script>
 </body>
 </html>
