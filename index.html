@@ -1,0 +1,1917 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PBA Optimizer - Timber Truss Saw Optimizer & Cutting Schedule</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- JSZip for handling .PSF (.zip) files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- SheetJS (xlsx) for exporting Excel cutting schedules -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- FontAwesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Fonts Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+    </style>
+</head>
+<body class="h-full bg-slate-900 text-slate-100 flex flex-col">
+
+    <!-- LOGIN SCREEN OVERLAY -->
+    <div id="login-overlay" class="fixed inset-0 bg-slate-950 z-50 flex items-center justify-center p-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl w-full max-w-md p-8 space-y-6 shadow-2xl shadow-red-950/20">
+            <div class="text-center space-y-2">
+                <div class="w-16 h-16 bg-red-600 text-white rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-red-600/30 text-2xl">
+                    <i class="fa-solid fa-gear fa-spin" style="animation-duration: 8s;"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-white tracking-tight">PBA Optimizer</h2>
+                <p class="text-xs text-slate-400">Secure Operator Login</p>
+            </div>
+
+            <form onsubmit="handleLogin(event)" class="space-y-4">
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Username</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-4 text-slate-500">
+                            <i class="fa-solid fa-user"></i>
+                        </span>
+                        <input type="text" id="login-username" required placeholder="Enter username (e.g., lliam or admin)" class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-11 pr-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                    </div>
+                </div>
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Password</label>
+                    <div class="relative">
+                        <span class="absolute inset-y-0 left-0 flex items-center pl-4 text-slate-500">
+                            <i class="fa-solid fa-lock"></i>
+                        </span>
+                        <input type="password" id="login-password" required placeholder="Enter password" class="w-full bg-slate-950 border border-slate-800 rounded-xl pl-11 pr-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                    </div>
+                </div>
+                <button type="submit" class="w-full bg-red-600 hover:bg-red-500 text-white font-bold py-3.5 rounded-xl text-sm transition-all shadow-lg shadow-red-600/30 flex items-center justify-center space-x-2">
+                    <span>Authenticate & Access</span>
+                    <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Top Navigation / Header -->
+    <header class="bg-slate-950 border-b border-slate-800 px-6 py-4 flex items-center justify-between shadow-md">
+        <div class="flex items-center space-x-3">
+            <div class="bg-red-600 text-white p-2.5 rounded-xl font-bold flex items-center justify-center shadow-lg shadow-red-600/30 text-lg">
+                <i class="fa-solid fa-gear"></i>
+            </div>
+            <div>
+                <h1 class="text-lg font-bold text-white tracking-tight">PBA Optimizer</h1>
+                
+            </div>
+        </div>
+        <div class="flex items-center space-x-4">
+            <button onclick="resetJobSession()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-3.5 py-1.5 rounded-lg text-xs flex items-center space-x-1.5 shadow-sm transition-all" title="Clear current job and start a new job">
+                <i class="fa-solid fa-file-circle-plus"></i>
+                <span>New Job</span>
+            </button>
+            <div id="file-status-badge" class="hidden items-center space-x-2 bg-emerald-950/80 border border-emerald-500/40 text-emerald-400 px-3 py-1.5 rounded-lg text-xs font-medium">
+                <i class="fa-solid fa-circle-check"></i>
+                <span id="loaded-filename">No file loaded</span>
+            </div>
+            <div class="flex items-center space-x-2 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg text-xs">
+                <i class="fa-solid fa-user-circle text-red-500"></i>
+                <span id="current-user-display" class="text-slate-200 font-semibold">Operator</span>
+            </div>
+            <button onclick="logout()" class="text-slate-400 hover:text-white px-2 py-1 text-xs" title="Logout">
+                <i class="fa-solid fa-right-from-bracket"></i>
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="flex-1 flex overflow-hidden">
+        
+        <!-- Sidebar Navigation Tabs -->
+        <aside class="w-64 bg-slate-950 border-r border-slate-800 flex flex-col justify-between p-4 select-none">
+            <nav class="space-y-1.5">
+                <button onclick="switchTab('upload')" id="nav-upload" class="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all bg-red-600 text-white shadow-lg shadow-red-600/20">
+                    <i class="fa-solid fa-file-arrow-up w-5 text-center"></i>
+                    <span>1. Upload PSF</span>
+                </button>
+                <button onclick="switchTab('materials')" id="nav-materials" class="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200">
+                    <i class="fa-solid fa-layer-group w-5 text-center"></i>
+                    <span>2. Materials & Stock</span>
+                </button>
+                <button onclick="switchTab('optimizer')" id="nav-optimizer" class="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200">
+                    <i class="fa-solid fa-gears w-5 text-center"></i>
+                    <span>3. Run Optimizer</span>
+                </button>
+                <button onclick="switchTab('schedule')" id="nav-schedule" class="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200">
+                    <i class="fa-solid fa-table-list w-5 text-center"></i>
+                    <span>4. Cutting Schedule</span>
+                </button>
+                <button onclick="switchTab('users')" id="nav-users" class="w-full hidden items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200">
+                    <i class="fa-solid fa-users-gear w-5 text-center"></i>
+                    <span>5. Operator Management</span>
+                </button>
+            </nav>
+
+            <div class="bg-slate-900/80 border border-slate-800/80 rounded-xl p-3.5 text-xs space-y-2 text-slate-400">
+                <div class="flex items-center space-x-2 text-red-400 font-semibold">
+                    <i class="fa-solid fa-circle-info"></i>
+                    <span>Standard Stock Config</span>
+                </div>
+                <p>Default stock lengths: 6000mm, 5400mm, 3600mm, 1800mm with standard saw kerf allowance.</p>
+            </div>
+        </aside>
+
+        <!-- Content Area -->
+        <div class="flex-1 bg-slate-900 overflow-y-auto p-8 relative">
+
+            <!-- TAB 1: UPLOAD PSF -->
+            <section id="tab-upload" class="max-w-3xl mx-auto space-y-6">
+                <div>
+                    <h2 class="text-2xl font-bold text-white">Upload Saw File (.PSF)</h2>
+                    <p class="text-sm text-slate-400 mt-1">Upload your automated saw project file. The system will unpack the `.psf` (ZIP container), read member dimensions from `members.json`, and retain `layout.json` untouched.</p>
+                </div>
+
+                <div id="drop-zone" class="border-2 border-dashed border-slate-700 hover:border-red-600 bg-slate-950/60 rounded-2xl p-10 text-center transition-all cursor-pointer flex flex-col items-center justify-center space-y-4">
+                    <div class="w-16 h-16 rounded-2xl bg-red-600/10 text-red-500 flex items-center justify-center text-2xl border border-red-600/20">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                    </div>
+                    <div>
+                        <p class="text-base font-semibold text-white">Drag & drop your .psf file here</p>
+                        <p class="text-xs text-slate-400 mt-1">or click to browse your computer</p>
+                    </div>
+                    <input type="file" id="psf-file-input" accept=".psf,.zip" class="hidden">
+                    <button onclick="document.getElementById('psf-file-input').click()" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm border border-slate-700 transition-all shadow-sm">
+                        Browse Files
+                    </button>
+                </div>
+
+                <!-- Sample file quick load option -->
+                <div class="bg-slate-950/40 border border-slate-800 rounded-2xl p-6 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h3 class="text-sm font-semibold text-white">Don't have a `.psf` file handy?</h3>
+                            <p class="text-xs text-slate-400">Generate a sample project with timber members to test the optimizer immediately.</p>
+                        </div>
+                        <button onclick="loadSampleData()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2 rounded-xl text-xs transition-all shadow-md shadow-red-600/20">
+                            <i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i> Load Sample Data
+                        </button>
+                    </div>
+                </div>
+
+                <!-- File Summary Preview Card -->
+                <div id="upload-summary-card" class="hidden bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
+                    <h3 class="text-sm font-semibold text-white flex items-center space-x-2">
+                        <i class="fa-solid fa-circle-check text-emerald-400"></i>
+                        <span>File Parsed Successfully</span>
+                    </h3>
+                    <div class="grid grid-cols-3 gap-4">
+                        <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                            <span class="text-xs text-slate-400 block">Total Members</span>
+                            <span id="stat-total-members" class="text-xl font-bold text-white">0</span>
+                        </div>
+                        <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                            <span class="text-xs text-slate-400 block">Unique Materials</span>
+                            <span id="stat-unique-materials" class="text-xl font-bold text-white">0</span>
+                        </div>
+                        <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                            <span class="text-xs text-slate-400 block">Layout Data Status</span>
+                            <span id="stat-layout-status" class="text-sm font-semibold text-emerald-400">Intact</span>
+                        </div>
+                    </div>
+                    <div class="flex justify-end pt-2">
+                        <button onclick="switchTab('materials')" class="bg-red-600 hover:bg-red-500 text-white font-bold px-6 py-2.5 rounded-xl text-sm transition-all shadow-md">
+                            Next: Configure Materials <i class="fa-solid fa-arrow-right ml-1.5"></i>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 2: MATERIALS & STOCK LENGTHS -->
+            <section id="tab-materials" class="max-w-5xl mx-auto space-y-6 hidden">
+                <div class="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-white">Material & Stock Length Management</h2>
+                        <p class="text-sm text-slate-400 mt-1">Review extracted timber grades/sizes, manage available stock lengths, save/load profiles, and add custom materials.</p>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        <button onclick="resetStockToDefaults()" class="bg-slate-800 hover:bg-slate-700 text-white font-semibold px-4 py-2.5 rounded-xl text-sm border border-slate-700 flex items-center space-x-2" title="Reset all materials to default stock lengths">
+                            <i class="fa-solid fa-rotate-right text-amber-400"></i>
+                            <span>Reset Stock</span>
+                        </button>
+                        <button onclick="openProfileModal()" class="bg-slate-800 hover:bg-slate-700 text-white font-semibold px-4 py-2.5 rounded-xl text-sm border border-slate-700 flex items-center space-x-2">
+                            <i class="fa-solid fa-bookmark text-red-500"></i>
+                            <span>Profiles</span>
+                        </button>
+                        <button onclick="openAddMaterialModal()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-all shadow-md flex items-center space-x-2">
+                            <i class="fa-solid fa-plus"></i>
+                            <span>Add Material</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Materials Table -->
+                <div class="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="bg-slate-900 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                    <th class="py-3.5 px-6">Material Description / Grade</th>
+                                    <th class="py-3.5 px-6">Member Count</th>
+                                    <th class="py-3.5 px-6">Available Stock Lengths (mm & Active Status)</th>
+                                    <th class="py-3.5 px-6 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="materials-table-body" class="divide-y divide-slate-800/80 text-sm">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="flex justify-between pt-2">
+                    <button onclick="switchTab('upload')" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm border border-slate-700">
+                        <i class="fa-solid fa-arrow-left mr-1.5"></i> Back
+                    </button>
+                    <button onclick="switchTab('optimizer')" class="bg-red-600 hover:bg-red-500 text-white font-bold px-6 py-2.5 rounded-xl text-sm transition-all shadow-md">
+                        Proceed to Optimizer <i class="fa-solid fa-arrow-right ml-1.5"></i>
+                    </button>
+                </div>
+            </section>
+
+            <!-- TAB 3: RUN OPTIMIZER -->
+            <section id="tab-optimizer" class="max-w-5xl mx-auto space-y-6 hidden">
+                <div>
+                    <h2 class="text-2xl font-bold text-white">1D Bin-Packing Optimization</h2>
+                    <p class="text-sm text-slate-400 mt-1">Configure optimization parameters, maximum reusable offcut threshold, and execute the bin-packing algorithm.</p>
+                </div>
+
+                <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 items-start">
+                        <div class="space-y-2 flex flex-col justify-between h-full">
+                            <div>
+                                <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Optimization Strategy</label>
+                                <select id="opt-strategy" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                                    <option value="bfd">Best Fit Decreasing (BFD)</option>
+                                    <option value="ffd">First Fit Decreasing (FFD)</option>
+                                    <option value="largest">Longest First (Descending)</option>
+                                    <option value="longest_stock">Longest Stock First (LSF)</option>
+                                </select>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-2">Packs members into tightest fitting stock.</p>
+                        </div>
+                        <div class="space-y-2 flex flex-col justify-between h-full">
+                            <div>
+                                <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Saw Blade Kerf (mm)</label>
+                                <input type="number" id="opt-kerf" value="3" min="0" max="10" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                            </div>
+                            <p class="text-xs text-slate-400 mt-2">Material removed per cut.</p>
+                        </div>
+                        <div class="space-y-2 flex flex-col justify-between h-full">
+                            <div>
+                                <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Max Waste Length (mm)</label>
+                                <input type="number" id="opt-max-waste" value="300" min="0" max="2000" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                            </div>
+                            <p class="text-xs text-slate-400 mt-2">Offcuts above this returned to stock as reusable.</p>
+                        </div>
+                        <div class="space-y-2 flex flex-col justify-between h-full">
+                            <div>
+                                <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Member Spacing (mm)</label>
+                                <input type="number" id="opt-member-spacing" value="0" min="0" max="50" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                            </div>
+                            <p class="text-xs text-slate-400 mt-2">Extra gap between cuts for sawyer clearance.</p>
+                        </div>
+                        <div class="space-y-2 flex flex-col justify-between h-full">
+                            <div>
+                                <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Truss Batch Limit (N)</label>
+                                <input type="number" id="opt-truss-limit" min="1" max="100" placeholder="e.g. 5 (All if blank)" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                            </div>
+                            <p class="text-xs text-slate-400 mt-2">Optimizes members in next N trusses.</p>
+                        </div>
+                    </div>
+
+                    <div class="border-t border-slate-800 pt-6 flex items-center justify-between">
+                        <div>
+                            <span class="text-sm font-semibold text-white block">Ready to process cutting list</span>
+                            <span class="text-xs text-slate-400">All materials and active stock lengths are configured.</span>
+                        </div>
+                        <button onclick="runOptimization()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-8 py-3 rounded-xl text-sm transition-all shadow-lg shadow-red-600/30 flex items-center space-x-2">
+                            <i class="fa-solid fa-play"></i>
+                            <span>Run Cutting Optimizer</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Optimization Results Preview Summary -->
+                <div id="optimization-results-summary" class="hidden bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4">
+                    <h3 class="text-sm font-semibold text-emerald-400 flex items-center space-x-2">
+                        <i class="fa-solid fa-circle-check"></i>
+                        <span>Optimization Complete Successfully!</span>
+                    </h3>
+                    <div id="opt-summary-metrics" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <!-- Populated dynamically -->
+                    </div>
+                    <div class="flex justify-end pt-2">
+                        <button onclick="switchTab('schedule')" class="bg-red-600 hover:bg-red-500 text-white font-bold px-6 py-2.5 rounded-xl text-sm transition-all shadow-md">
+                            View Cutting Schedule & Export <i class="fa-solid fa-arrow-right ml-1.5"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="flex justify-between pt-2">
+                    <button onclick="switchTab('materials')" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm border border-slate-700">
+                        <i class="fa-solid fa-arrow-left mr-1.5"></i> Back
+                    </button>
+                </div>
+            </section>
+
+            <!-- TAB 4: CUTTING SCHEDULE & EXPORT -->
+            <section id="tab-schedule" class="max-w-6xl mx-auto space-y-6 hidden">
+                <div class="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-white">Cutting Schedule & Export</h2>
+                        <p class="text-sm text-slate-400 mt-1">Review the total material summary, reusable stock returns, board cutting sequences, and export files.</p>
+                    </div>
+                    <div class="flex items-center space-x-3">
+                        <button onclick="exportPSFFile()" class="bg-slate-800 hover:bg-slate-700 text-white font-semibold px-4 py-2.5 rounded-xl text-sm border border-slate-700 flex items-center space-x-2 shadow-sm">
+                            <i class="fa-solid fa-file-zipper text-red-500"></i>
+                            <span>Download Optimized .PSF</span>
+                        </button>
+                        <button onclick="exportExcelSchedule()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-emerald-600/20">
+                            <i class="fa-solid fa-file-excel"></i>
+                            <span>Download Excel Schedule (.xlsx)</span>
+                        </button>
+                        <button onclick="printConsolidatedStockDraw()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-indigo-600/20">
+                            <i class="fa-solid fa-print"></i>
+                            <span>Print Stock Draw</span>
+                        </button>
+                        <button onclick="printVisualCutList()" class="bg-amber-600 hover:bg-amber-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-amber-600/20" title="Print graphical board-by-board cutting diagrams">
+                            <i class="fa-solid fa-image"></i>
+                            <span>Print Visual Cut List</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Summary Dashboard Table -->
+                <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                    <h3 class="text-sm font-semibold text-white uppercase tracking-wider flex items-center space-x-2">
+                        <i class="fa-solid fa-chart-pie text-red-500"></i>
+                        <span>Material Summary & Reusable Stock Report</span>
+                    </h3>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr class="bg-slate-900 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                    <th class="py-3 px-4">Material / Grade</th>
+                                    <th class="py-3 px-4 text-center">Total Boards</th>
+                                    <th class="py-3 px-4 text-right">Total Stock (m)</th>
+                                    <th class="py-3 px-4 text-right">Total Cut Length (m)</th>
+                                    <th class="py-3 px-4 text-right">Waste (m)</th>
+                                    <th class="py-3 px-4 text-right">Reusable Stock (m)</th>
+                                    <th class="py-3 px-4 text-right">Waste %</th>
+                                </tr>
+                            </thead>
+                            <tbody id="summary-table-body" class="divide-y divide-slate-800/80">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Reusable Stock / Offcuts Table -->
+                <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                    <h3 class="text-sm font-semibold text-white uppercase tracking-wider flex items-center space-x-2">
+                        <i class="fa-solid fa-rotate-left text-emerald-400"></i>
+                        <span>Returned Reusable Stock (Offcuts >= Max Waste Threshold)</span>
+                    </h3>
+                    <div class="overflow-x-auto max-h-64">
+                        <table class="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr class="bg-slate-900 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider sticky top-0 z-10">
+                                    <th class="py-3 px-4">Material</th>
+                                    <th class="py-3 px-4 text-center">Board #</th>
+                                    <th class="py-3 px-4 text-right">Offcut Length (mm)</th>
+                                    <th class="py-3 px-4">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="reusable-stock-body" class="divide-y divide-slate-800/80 font-mono text-xs">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Board-by-Board Cutting Schedule Table -->
+                <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                    <h3 class="text-sm font-semibold text-white uppercase tracking-wider flex items-center space-x-2">
+                        <i class="fa-solid fa-list-check text-red-500"></i>
+                        <span>Detailed Board Cutting Sequences</span>
+                    </h3>
+                    <div class="overflow-x-auto max-h-96">
+                        <table class="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr class="bg-slate-900 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider sticky top-0 z-10">
+                                    <th class="py-3 px-4">Material</th>
+                                    <th class="py-3 px-4 text-center">Board #</th>
+                                    <th class="py-3 px-4 text-right">Stock Length (mm)</th>
+                                    <th class="py-3 px-4">Cut Sequence (Lengths in mm)</th>
+                                    <th class="py-3 px-4">Member Labels</th>
+                                    <th class="py-3 px-4 text-right">Remnant / Waste (mm)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="detailed-schedule-body" class="divide-y divide-slate-800/80 font-mono text-xs">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="flex justify-between pt-2">
+                    <button onclick="switchTab('optimizer')" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm border border-slate-700">
+                        <i class="fa-solid fa-arrow-left mr-1.5"></i> Back to Optimizer
+                    </button>
+                </div>
+            </section>
+
+            <!-- TAB 5: OPERATOR MANAGEMENT -->
+            <section id="tab-users" class="max-w-4xl mx-auto space-y-6 hidden">
+                <div class="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-white">Operator & User Management</h2>
+                        <p class="text-sm text-slate-400 mt-1">Manage system operators, create new login credentials, and assign administrative or standard privileges.</p>
+                    </div>
+                    <button onclick="openCreateUserModal()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2.5 rounded-xl text-sm transition-all shadow-md flex items-center space-x-2">
+                        <i class="fa-solid fa-user-plus"></i>
+                        <span>Create New User</span>
+                    </button>
+                </div>
+
+                <div class="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr class="bg-slate-900 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                    <th class="py-3.5 px-6">Username</th>
+                                    <th class="py-3.5 px-6">Role</th>
+                                    <th class="py-3.5 px-6 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="users-table-body" class="divide-y divide-slate-800/80">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="flex justify-between pt-2">
+                    <button onclick="switchTab('schedule')" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm border border-slate-700">
+                        <i class="fa-solid fa-arrow-left mr-1.5"></i> Back to Schedule
+                    </button>
+                </div>
+            </section>
+
+        </div>
+    </main>
+
+    <!-- Modal: Create New User -->
+    <div id="create-user-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-6 shadow-2xl">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-bold text-white flex items-center space-x-2">
+                    <i class="fa-solid fa-user-plus text-red-500"></i>
+                    <span>Create New Operator User</span>
+                </h3>
+                <button onclick="closeCreateUserModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <form onsubmit="handleCreateUser(event)" class="space-y-4">
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Username</label>
+                    <input type="text" id="new-username" required placeholder="e.g. john" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Password</label>
+                    <input type="password" id="new-password" required placeholder="Enter password" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Role</label>
+                    <select id="new-role" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                        <option value="Operator">Standard Operator</option>
+                        <option value="Admin">Administrator</option>
+                    </select>
+                </div>
+                <div class="flex justify-end space-x-3 pt-2">
+                    <button type="button" onclick="closeCreateUserModal()" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-4 py-2.5 rounded-xl text-sm">Cancel</button>
+                    <button type="submit" class="bg-red-600 hover:bg-red-500 text-white font-bold px-5 py-2.5 rounded-xl text-sm">Create User</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal: Add / Edit Material -->
+    <div id="material-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-6 shadow-2xl">
+            <div class="flex items-center justify-between">
+                <h3 id="modal-title" class="text-lg font-bold text-white">Add New Material</h3>
+                <button onclick="closeMaterialModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <div class="space-y-4">
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Material Description / Grade</label>
+                    <input type="text" id="modal-material-name" placeholder="e.g. 90x35 MGP10" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                </div>
+                <div class="space-y-1.5">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Default Stock Lengths (comma separated mm)</label>
+                    <input type="text" id="modal-stock-lengths" value="6000, 5400, 3600, 1800" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                </div>
+            </div>
+            <div class="flex justify-end space-x-3 pt-2">
+                <button onclick="closeMaterialModal()" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-4 py-2.5 rounded-xl text-sm">Cancel</button>
+                <button onclick="saveMaterialModal()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-5 py-2.5 rounded-xl text-sm">Save Material</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Profiles Management -->
+    <div id="profile-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-6 shadow-2xl">
+            <div class="flex items-center justify-between">
+                <h3 class="text-lg font-bold text-white flex items-center space-x-2">
+                    <i class="fa-solid fa-bookmark text-red-500"></i>
+                    <span>Manage Material & Stock Profiles</span>
+                </h3>
+                <button onclick="closeProfileModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+            <div class="space-y-4">
+                <div class="bg-slate-950 border border-slate-800 p-4 rounded-xl space-y-3">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block">Save Current Configuration as Profile</label>
+                    <div class="flex space-x-2">
+                        <input type="text" id="profile-name-input" placeholder="e.g. Standard Plant Profile A" class="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-red-600">
+                        <button onclick="saveCurrentProfile()" class="bg-red-600 hover:bg-red-500 text-white font-bold px-4 py-2.5 rounded-xl text-sm">Save Profile</button>
+                    </div>
+                </div>
+
+                <div class="space-y-2">
+                    <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block">Saved Profiles</label>
+                    <div id="profiles-list-container" class="space-y-2 max-h-60 overflow-y-auto">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+            <div class="flex justify-end pt-2">
+                <button onclick="closeProfileModal()" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-4 py-2.5 rounded-xl text-sm">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Toast -->
+    <div id="toast" class="fixed bottom-6 right-6 bg-slate-950 border border-slate-800 text-white px-5 py-3 rounded-xl shadow-2xl z-50 transform translate-y-20 opacity-0 transition-all duration-300 flex items-center space-x-3">
+        <i id="toast-icon" class="fa-solid fa-circle-check text-emerald-400"></i>
+        <span id="toast-message" class="text-sm font-medium">Notification message</span>
+    </div>
+
+    <!-- Application JavaScript -->
+    <script>
+        // User Database Management
+        function getUsersDB() {
+            try {
+                return JSON.parse(localStorage.getItem('pba_optimizer_users')) || {
+                    "admin": { password: "pba2026", role: "Admin" },
+                    "lliam": { password: "lliam", role: "Admin" }
+                };
+            } catch (e) {
+                return {
+                    "admin": { password: "pba2026", role: "Admin" },
+                    "lliam": { password: "lliam", role: "Admin" }
+                };
+            }
+        }
+
+        function saveUsersDB(users) {
+            localStorage.setItem('pba_optimizer_users', JSON.stringify(users));
+        }
+
+        let currentUser = null;
+
+        // Authentication guard check on login submit
+        function handleLogin(e) {
+            e.preventDefault();
+            const usernameInput = document.getElementById('login-username').value.trim().toLowerCase();
+            const passwordInput = document.getElementById('login-password').value;
+
+            const users = getUsersDB();
+            if (users[usernameInput] && users[usernameInput].password === passwordInput) {
+                currentUser = { username: usernameInput, role: users[usernameInput].role };
+                document.getElementById('login-overlay').classList.add('hidden');
+                document.getElementById('current-user-display').textContent = `${usernameInput} (${currentUser.role})`;
+
+                const navUsersBtn = document.getElementById('nav-users');
+                if (currentUser.role === 'Admin') {
+                    navUsersBtn.classList.remove('hidden');
+                    navUsersBtn.classList.add('flex');
+                } else {
+                    navUsersBtn.classList.add('hidden');
+                    navUsersBtn.classList.remove('flex');
+                }
+
+                renderUsersTable();
+                showToast(`Welcome back, ${usernameInput}!`);
+            } else {
+                showToast("Invalid username or password.", 'error');
+            }
+        }
+
+        function logout() {
+            currentUser = null;
+            document.getElementById('login-password').value = "";
+            document.getElementById('login-username').value = "";
+            document.getElementById('login-overlay').classList.remove('hidden');
+            showToast("Logged out successfully.");
+        }
+
+        function openCreateUserModal() {
+            document.getElementById('new-username').value = "";
+            document.getElementById('new-password').value = "";
+            document.getElementById('create-user-modal').classList.remove('hidden');
+        }
+
+        function closeCreateUserModal() {
+            document.getElementById('create-user-modal').classList.add('hidden');
+        }
+
+        function handleCreateUser(e) {
+            e.preventDefault();
+            const u = document.getElementById('new-username').value.trim().toLowerCase();
+            const p = document.getElementById('new-password').value;
+            const r = document.getElementById('new-role').value;
+
+            if (!u || !p) {
+                showToast("Please enter username and password.", 'error');
+                return;
+            }
+
+            const users = getUsersDB();
+            if (users[u]) {
+                showToast(`User '${u}' already exists.`, 'error');
+                return;
+            }
+
+            users[u] = { password: p, role: r };
+            saveUsersDB(users);
+            closeCreateUserModal();
+            renderUsersTable();
+            showToast(`User '${u}' created successfully!`);
+        }
+
+        function renderUsersTable() {
+            const tbody = document.getElementById('users-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            const users = getUsersDB();
+            Object.keys(users).forEach(uname => {
+                const uData = users[uname];
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-900/50 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-4 px-6 font-semibold text-white flex items-center space-x-2">
+                        <i class="fa-solid fa-user text-red-500 text-xs"></i>
+                        <span>${uname}</span>
+                    </td>
+                    <td class="py-4 px-6 text-slate-300">
+                        <span class="px-2.5 py-1 rounded-full text-xs font-semibold ${uData.role === 'Admin' ? 'bg-red-950/80 border border-red-500/40 text-red-400' : 'bg-slate-900 border border-slate-800 text-slate-300'}">${uData.role}</span>
+                    </td>
+                    <td class="py-4 px-6 text-right">
+                        ${uname !== currentUser.username ? `<button onclick="deleteUser('${uname}')" class="text-slate-400 hover:text-red-500 p-2" title="Delete User"><i class="fa-solid fa-trash"></i></button>` : `<span class="text-xs text-slate-600 italic">Current Session</span>`}
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function deleteUser(uname) {
+            if (confirm(`Are you sure you want to delete user '${uname}'?`)) {
+                const users = getUsersDB();
+                delete users[uname];
+                saveUsersDB(users);
+                renderUsersTable();
+                showToast(`User '${uname}' deleted.`);
+            }
+        }
+
+        // Global State
+        let loadedZip = null;
+        let layoutJsonData = null;
+        let membersJsonData = [];
+        let materialsConfig = {}; // Map: materialName -> { stockLengths: [{length: 6000, active: true}, ...] }
+        let optimizationResult = null;
+        let currentFileName = "";
+
+        // Default stock lengths for auto-discovered materials
+        const DEFAULT_STOCK_LENGTHS = [6000, 5400, 3600, 1800];
+
+        // Load saved profiles from localStorage on init
+        function getSavedProfiles() {
+            try {
+                return JSON.parse(localStorage.getItem('pba_optimizer_profiles')) || {
+                    "Default Standard Profile": {
+                        "90x35 F5MGS": { stockLengths: [{length: 6000, active: true}, {length: 5400, active: true}, {length: 3600, active: true}, {length: 1800, active: true}] },
+                        "90x35 MGP10": { stockLengths: [{length: 6000, active: true}, {length: 5400, active: true}] },
+                        "70x35 F5MGS": { stockLengths: [{length: 5400, active: true}, {length: 6000, active: true}] }
+                    }
+                };
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function saveProfilesToStorage(profiles) {
+            localStorage.setItem('pba_optimizer_profiles', JSON.stringify(profiles));
+        }
+
+        // Tab Switching
+        function switchTab(tabId) {
+            ['upload', 'materials', 'optimizer', 'schedule', 'users'].forEach(t => {
+                const tabEl = document.getElementById(`tab-${t}`);
+                if (tabEl) tabEl.classList.add('hidden');
+                const navEl = document.getElementById(`nav-${t}`);
+                if (navEl) {
+                    if (t === 'users' && (!currentUser || currentUser.role !== 'Admin')) {
+                        navEl.classList.add('hidden');
+                        navEl.classList.remove('flex');
+                    } else {
+                        navEl.className = "w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200";
+                    }
+                }
+            });
+            const targetTab = document.getElementById(`tab-${tabId}`);
+            if (targetTab) targetTab.classList.remove('hidden');
+            const targetNav = document.getElementById(`nav-${tabId}`);
+            if (targetNav) {
+                targetNav.className = "w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all bg-red-600 text-white shadow-lg shadow-red-600/20";
+            }
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
+        // Toast notification
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            const icon = document.getElementById('toast-icon');
+            const msg = document.getElementById('toast-message');
+            
+            msg.textContent = message;
+            icon.className = type === 'success' ? "fa-solid fa-circle-check text-emerald-400" : "fa-solid fa-circle-exclamation text-amber-400";
+            
+            toast.classList.remove('translate-y-20', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('translate-y-20', 'opacity-0');
+            }, 3500);
+        }
+
+        // Drag and drop event listeners
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('psf-file-input');
+
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('border-red-600', 'bg-slate-900'); });
+        dropZone.addEventListener('dragleave', () => { dropZone.classList.remove('border-red-600', 'bg-slate-900'); });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-red-600', 'bg-slate-900');
+            if (e.dataTransfer.files.length > 0) handlePsfFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) handlePsfFile(e.target.files[0]);
+        });
+
+        // Handle PSF File upload & parsing via JSZip
+        async function handlePsfFile(file) {
+            currentFileName = file.name;
+            try {
+                const zip = new JSZip();
+                const contents = await zip.loadAsync(file);
+                loadedZip = contents;
+
+                if (!contents.files['members.json'] || !contents.files['layout.json']) {
+                    throw new Error("Invalid .PSF structure: 'members.json' or 'layout.json' missing from archive.");
+                }
+
+                const layoutText = await contents.files['layout.json'].async('text');
+                const membersText = await contents.files['members.json'].async('text');
+
+                layoutJsonData = JSON.parse(layoutText);
+                membersJsonData = JSON.parse(membersText);
+
+                processParsedMembers();
+                
+                document.getElementById('loaded-filename').textContent = currentFileName;
+                document.getElementById('file-status-badge').classList.remove('hidden');
+                document.getElementById('file-status-badge').classList.add('flex');
+                document.getElementById('upload-summary-card').classList.remove('hidden');
+
+                document.getElementById('stat-total-members').textContent = membersJsonData.length;
+                document.getElementById('stat-unique-materials').textContent = Object.keys(materialsConfig).length;
+
+                showToast(`Successfully loaded ${membersJsonData.length} members from ${file.name}`);
+            } catch (err) {
+                console.error(err);
+                showToast(err.message, 'error');
+            }
+        }
+
+        // Load Sample Data function for testing without external files
+        function loadSampleData() {
+            currentFileName = "sample_truss_project.psf";
+            layoutJsonData = { version: "1.0", units: "mm", data: "sample_layout_coordinates" };
+            
+            // Generate realistic sample timber members
+            const sampleMaterials = ["90x35 MGP10", "90x45 MGP12", "140x45 MGP10", "70x35 F5"];
+            membersJsonData = [];
+            let idCounter = 1001;
+
+            sampleMaterials.forEach((mat, mIdx) => {
+                const count = 18 + (mIdx * 3);
+                for (let i = 0; i < count; i++) {
+                    const length = Math.floor(Math.random() * 4000) + 850;
+                    membersJsonData.push({
+                        id: `M-${idCounter++}`,
+                        material: mat,
+                        length: length,
+                        label: `Truss Member ${idCounter}`,
+                        truss: `TR-${Math.floor(i / 4) + 1}`
+                    });
+                }
+            });
+
+            processParsedMembers();
+
+            document.getElementById('loaded-filename').textContent = currentFileName;
+            document.getElementById('file-status-badge').classList.remove('hidden');
+            document.getElementById('file-status-badge').classList.add('flex');
+            document.getElementById('upload-summary-card').classList.remove('hidden');
+
+            document.getElementById('stat-total-members').textContent = membersJsonData.length;
+            document.getElementById('stat-unique-materials').textContent = Object.keys(materialsConfig).length;
+
+            showToast(`Loaded sample project with ${membersJsonData.length} timber members!`);
+        }
+
+        // Process parsed members to build materials config
+        function processParsedMembers() {
+            let rawList = membersJsonData;
+            if (!Array.isArray(membersJsonData)) {
+                if (membersJsonData && Array.isArray(membersJsonData.members)) {
+                    rawList = membersJsonData.members;
+                } else {
+                    const foundKey = Object.keys(membersJsonData).find(k => Array.isArray(membersJsonData[k]));
+                    if (foundKey) {
+                        rawList = membersJsonData[foundKey];
+                    } else {
+                        rawList = [];
+                    }
+                }
+            }
+            membersJsonData = rawList;
+
+            membersJsonData.forEach(member => {
+                const mat = member.material || member.Material || member.grade || member.Grade || "Standard Timber";
+                const len = Number(member.length || member.Length || member.DIM || 1000);
+                member.materialNormalized = mat;
+                member.lengthNormalized = len;
+
+                if (!materialsConfig[mat]) {
+                    materialsConfig[mat] = {
+                        stockLengths: DEFAULT_STOCK_LENGTHS.map(l => ({ length: l, active: true }))
+                    };
+                }
+            });
+
+            renderMaterialsTable();
+        }
+
+        // Render Materials Table
+        function renderMaterialsTable() {
+            const tbody = document.getElementById('materials-table-body');
+            tbody.innerHTML = '';
+
+            const materialCounts = {};
+            membersJsonData.forEach(m => {
+                materialCounts[m.materialNormalized] = (materialCounts[m.materialNormalized] || 0) + 1;
+            });
+
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+
+            Object.keys(materialsConfig).forEach(matName => {
+                const count = materialCounts[matName] || 0;
+                const stockConfig = materialsConfig[matName].stockLengths;
+
+                let stockBadgesHTML = stockConfig.map((s, idx) => `
+                    <label class="inline-flex items-center space-x-1.5 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg text-xs cursor-pointer hover:border-slate-700">
+                        <input type="checkbox" ${s.active ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''} onchange="toggleStockLength('${matName}', ${idx})" class="rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-0 ${!isAdmin ? 'opacity-60 cursor-not-allowed' : ''}">
+                        <span class="text-white font-medium">${s.length}mm</span>
+                    </label>
+                `).join(' ');
+
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-900/50 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-4 px-6 font-semibold text-white">${matName} ${count === 0 ? '<span class="text-xs text-red-400 font-normal ml-2">(Custom Material)</span>' : ''}</td>
+                    <td class="py-4 px-6 text-slate-300 font-medium">${count} members</td>
+                    <td class="py-4 px-6"><div class="flex flex-wrap gap-2">${stockBadgesHTML}</div></td>
+                    <td class="py-4 px-6 text-right space-x-2">
+                        ${isAdmin ? `
+                            <button onclick="editMaterialStocks('${matName}')" class="text-slate-400 hover:text-red-400 p-2 transition-colors" title="Edit Stock Lengths">
+                                <i class="fa-solid fa-pen-to-square"></i>
+                            </button>
+                            <button onclick="deleteMaterial('${matName}')" class="text-slate-400 hover:text-red-500 p-2 transition-colors" title="Delete Material">
+                                <i class="fa-solid fa-trash"></i>
+                            </button>
+                        ` : `<span class="text-xs text-slate-500 italic">Locked</span>`}
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function toggleStockLength(matName, idx) {
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+            if (!isAdmin) {
+                showToast("Only administrators can modify stock configurations.", 'error');
+                renderMaterialsTable();
+                return;
+            }
+            materialsConfig[matName].stockLengths[idx].active = !materialsConfig[matName].stockLengths[idx].active;
+        }
+
+        function deleteMaterial(matName) {
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+            if (!isAdmin) {
+                showToast("Only administrators can delete materials.", 'error');
+                return;
+            }
+            if (confirm(`Are you sure you want to remove material '${matName}'?`)) {
+                delete materialsConfig[matName];
+                renderMaterialsTable();
+                showToast(`Material '${matName}' removed.`);
+            }
+        }
+
+        // Modal handling for adding/editing material stock lengths
+        let editingMaterialKey = null;
+        function openAddMaterialModal() {
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+            if (!isAdmin) {
+                showToast("Only administrators can add custom materials.", 'error');
+                return;
+            }
+            editingMaterialKey = null;
+            document.getElementById('modal-title').textContent = "Add Custom Material";
+            document.getElementById('modal-material-name').value = "";
+            document.getElementById('modal-stock-lengths').value = "6000, 5400, 3600, 1800";
+            document.getElementById('material-modal').classList.remove('hidden');
+        }
+
+        function editMaterialStocks(matName) {
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+            if (!isAdmin) {
+                showToast("Only administrators can edit stock lengths.", 'error');
+                return;
+            }
+            editingMaterialKey = matName;
+            document.getElementById('modal-title').textContent = `Edit Stock Lengths: ${matName}`;
+            document.getElementById('modal-material-name').value = matName;
+            document.getElementById('modal-stock-lengths').value = materialsConfig[matName].stockLengths.map(s => s.length).join(', ');
+            document.getElementById('material-modal').classList.remove('hidden');
+        }
+
+        function closeMaterialModal() {
+            document.getElementById('material-modal').classList.add('hidden');
+        }
+
+        function saveMaterialModal() {
+            const matName = document.getElementById('modal-material-name').value.trim();
+            const rawStocks = document.getElementById('modal-stock-lengths').value;
+            if (!matName) {
+                showToast("Please enter a valid material name.", 'error');
+                return;
+            }
+
+            const stockArr = rawStocks.split(',').map(s => Number(s.trim())).filter(n => !isNaN(n) && n > 0);
+            if (stockArr.length === 0) {
+                showToast("Please provide at least one valid stock length.", 'error');
+                return;
+            }
+
+            stockArr.sort((a, b) => b - a);
+
+            if (editingMaterialKey && editingMaterialKey !== matName) {
+                delete materialsConfig[editingMaterialKey];
+            }
+
+            materialsConfig[matName] = {
+                stockLengths: stockArr.map(l => ({ length: l, active: true }))
+            };
+
+            closeMaterialModal();
+            renderMaterialsTable();
+            showToast(`Material '${matName}' saved successfully.`);
+        }
+
+        // Profiles Modal
+        function openProfileModal() {
+            renderProfilesList();
+            document.getElementById('profile-modal').classList.remove('hidden');
+        }
+
+        function closeProfileModal() {
+            document.getElementById('profile-modal').classList.add('hidden');
+        }
+
+        function renderProfilesList() {
+            const container = document.getElementById('profiles-list-container');
+            const profiles = getSavedProfiles();
+            container.innerHTML = '';
+
+            const keys = Object.keys(profiles);
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+
+            // Show or hide save profile section based on admin role
+            const saveProfileSection = document.getElementById('save-profile-section');
+            if (saveProfileSection) {
+                if (isAdmin) {
+                    saveProfileSection.classList.remove('hidden');
+                } else {
+                    saveProfileSection.classList.add('hidden');
+                }
+            }
+
+            if (keys.length === 0) {
+                container.innerHTML = `<p class="text-xs text-slate-500 italic">No saved profiles found.</p>`;
+                return;
+            }
+
+            keys.forEach(pName => {
+                const div = document.createElement('div');
+                div.className = "flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-xl";
+                div.innerHTML = `
+                    <div>
+                        <span class="text-sm font-semibold text-white block">${pName}</span>
+                        <span class="text-xs text-slate-400">${Object.keys(profiles[pName]).length} materials configured</span>
+                    </div>
+                    <div class="space-x-2">
+                        <button onclick="loadProfile('${pName}')" class="bg-red-600 hover:bg-red-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs">Load</button>
+                        ${isAdmin ? `<button onclick="deleteProfile('${pName}')" class="text-slate-400 hover:text-red-400 p-1.5"><i class="fa-solid fa-trash text-xs"></i></button>` : ``}
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function saveCurrentProfile() {
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+            if (!isAdmin) {
+                showToast("Only administrators can save new profiles.", 'error');
+                return;
+            }
+            const pName = document.getElementById('profile-name-input').value.trim();
+            if (!pName) {
+                showToast("Please enter a profile name.", 'error');
+                return;
+            }
+
+            const profiles = getSavedProfiles();
+            profiles[pName] = JSON.parse(JSON.stringify(materialsConfig));
+            saveProfilesToStorage(profiles);
+            document.getElementById('profile-name-input').value = "";
+            renderProfilesList();
+            showToast(`Profile '${pName}' saved successfully.`);
+        }
+
+        function loadProfile(pName) {
+            const profiles = getSavedProfiles();
+            if (profiles[pName]) {
+                materialsConfig = JSON.parse(JSON.stringify(profiles[pName]));
+                renderMaterialsTable();
+                closeProfileModal();
+                showToast(`Profile '${pName}' loaded successfully.`);
+            }
+        }
+
+        function deleteProfile(pName) {
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+            if (!isAdmin) {
+                showToast("Only administrators can delete profiles.", 'error');
+                return;
+            }
+            if (confirm(`Delete profile '${pName}'?`)) {
+                const profiles = getSavedProfiles();
+                delete profiles[pName];
+                saveProfilesToStorage(profiles);
+                renderProfilesList();
+                showToast(`Profile '${pName}' deleted.`);
+            }
+        }
+
+        // 1D Bin-Packing Optimizer Algorithm
+        function runOptimization() {
+            if (membersJsonData.length === 0) {
+                showToast("No members loaded. Please upload a PSF file or load sample data first.", 'error');
+                return;
+            }
+
+            const strategy = document.getElementById('opt-strategy').value;
+            const kerf = Number(document.getElementById('opt-kerf').value) || 0;
+            const maxWasteThreshold = Number(document.getElementById('opt-max-waste').value) || 300;
+            const trussLimitInput = document.getElementById('opt-truss-limit').value.trim();
+
+            let limitN = null;
+            if (trussLimitInput !== "") {
+                const parsedN = parseInt(trussLimitInput, 10);
+                if (!isNaN(parsedN) && parsedN > 0) {
+                    limitN = parsedN;
+                }
+            }
+
+            // Identify unique trusses in order of appearance
+            let uniqueTrusses = [];
+            membersJsonData.forEach(m => {
+                let tName = m.truss || m.Truss || m.assembly || m.Assembly || 'General';
+                if (!uniqueTrusses.includes(tName)) {
+                    uniqueTrusses.push(tName);
+                }
+            });
+
+            // Create truss batches if limitN is populated, otherwise one global batch containing all trusses
+            let trussBatches = [];
+            if (limitN && limitN > 0) {
+                for (let i = 0; i < uniqueTrusses.length; i += limitN) {
+                    trussBatches.push(uniqueTrusses.slice(i, i + limitN));
+                }
+            } else {
+                trussBatches = [uniqueTrusses];
+            }
+
+            let allOptimizedBoards = [];
+            let globalSummaryByMaterial = {};
+            let allReusableOffcuts = [];
+
+            let totalCutLengthAll = 0;
+            let totalStockLengthAll = 0;
+            let totalBoardsCount = 0;
+            let totalReusableStockAll = 0;
+
+            let globalMaterialSummaryAcc = {};
+
+            // Process batch by batch in order of truss appearance so that members are grouped and optimized by truss batch then material
+            trussBatches.forEach((batchTrusses, bIdx) => {
+                let batchMembers = membersJsonData.filter(m => {
+                    let tName = m.truss || m.Truss || m.assembly || m.Assembly || 'General';
+                    return batchTrusses.includes(tName);
+                });
+
+                if (batchMembers.length === 0) return;
+
+                const groups = {};
+                batchMembers.forEach(m => {
+                    const mat = m.materialNormalized;
+                    if (!groups[mat]) groups[mat] = [];
+                    groups[mat].push({ ...m });
+                });
+
+                Object.keys(groups).forEach(mat => {
+                    const members = groups[mat];
+                    const config = materialsConfig[mat];
+                    const activeStocks = config ? config.stockLengths.filter(s => s.active).map(s => s.length).sort((a, b) => b - a) : [6000, 5400, 3600, 1800];
+
+                    if (activeStocks.length === 0) return;
+
+                    if (strategy === 'bfd' || strategy === 'ffd' || strategy === 'largest') {
+                        members.sort((a, b) => b.lengthNormalized - a.lengthNormalized);
+                    }
+
+                    let bins = [];
+
+                    members.forEach(member => {
+                        const memberSpacing = Number(document.getElementById('opt-member-spacing').value) || 0;
+                        const needed = member.lengthNormalized + kerf + memberSpacing;
+                        let placed = false;
+
+                        if (strategy === 'bfd') {
+                            let bestBinIdx = -1;
+                            let minRemainingAfter = Infinity;
+
+                            bins.forEach((bin, binIdx) => {
+                                if (bin.remnant >= needed) {
+                                    const remAfter = bin.remnant - needed;
+                                    if (remAfter < minRemainingAfter) {
+                                        minRemainingAfter = remAfter;
+                                        bestBinIdx = binIdx;
+                                    }
+                                }
+                            });
+
+                            if (bestBinIdx !== -1) {
+                                bins[bestBinIdx].cuts.push(member);
+                                bins[bestBinIdx].remnant -= needed;
+                                placed = true;
+                            }
+                        } else {
+                            for (let i = 0; i < bins.length; i++) {
+                                if (bins[i].remnant >= needed) {
+                                    bins[i].cuts.push(member);
+                                    bins[i].remnant -= needed;
+                                    placed = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (!placed) {
+                            let chosenStock = activeStocks[activeStocks.length - 1];
+                            if (strategy === 'longest_stock') {
+                                chosenStock = activeStocks[0];
+                            } else {
+                                for (let i = activeStocks.length - 1; i >= 0; i--) {
+                                    if (activeStocks[i] >= member.lengthNormalized) {
+                                        chosenStock = activeStocks[i];
+                                        break;
+                                    }
+                                }
+                                if (member.lengthNormalized > chosenStock) {
+                                    chosenStock = activeStocks[0];
+                                }
+                            }
+
+                            bins.push({
+                                stockLength: chosenStock,
+                                cuts: [member],
+                                remnant: chosenStock - member.lengthNormalized
+                            });
+                        }
+                    });
+
+                    let matTotalBoards = bins.length;
+                    let matTotalStockLen = bins.reduce((acc, b) => acc + b.stockLength, 0);
+                    let matTotalCutLen = 0;
+                    let matWasteLen = 0;
+                    let matReusableLen = 0;
+
+                    bins.forEach((bin, boardIdx) => {
+                        let boardCutLen = bin.cuts.reduce((acc, c) => acc + c.lengthNormalized, 0);
+                        matTotalCutLen += boardCutLen;
+                        let kerfsTotal = Math.max(0, (bin.cuts.length - 1)) * kerf;
+                        const memberSpacing = Number(document.getElementById('opt-member-spacing').value) || 0;
+                        let spacingTotal = bin.cuts.length * memberSpacing;
+                        let rawRemnant = bin.stockLength - boardCutLen - kerfsTotal - spacingTotal;
+                        rawRemnant = Math.max(0, rawRemnant);
+
+                        let isReusable = rawRemnant >= maxWasteThreshold;
+                        let wasteForCalc = isReusable ? 0 : rawRemnant;
+                        let reusableForCalc = isReusable ? rawRemnant : 0;
+
+                        matWasteLen += wasteForCalc;
+                        matReusableLen += reusableForCalc;
+
+                        if (isReusable) {
+                            allReusableOffcuts.push({
+                                material: mat,
+                                boardIndex: allOptimizedBoards.length + 1,
+                                length: rawRemnant
+                            });
+                        }
+
+                        allOptimizedBoards.push({
+                            material: mat,
+                            boardIndex: allOptimizedBoards.length + 1,
+                            stockLength: bin.stockLength,
+                            cuts: bin.cuts,
+                            remnant: rawRemnant,
+                            isReusable: isReusable
+                        });
+                    });
+
+                    if (!globalMaterialSummaryAcc[mat]) {
+                        globalMaterialSummaryAcc[mat] = { totalBoards: 0, totalStockLen: 0, totalCutLen: 0, wasteLen: 0, reusableLen: 0 };
+                    }
+                    globalMaterialSummaryAcc[mat].totalBoards += matTotalBoards;
+                    globalMaterialSummaryAcc[mat].totalStockLen += matTotalStockLen;
+                    globalMaterialSummaryAcc[mat].totalCutLen += matTotalCutLen;
+                    globalMaterialSummaryAcc[mat].wasteLen += matWasteLen;
+                    globalMaterialSummaryAcc[mat].reusableLen += matReusableLen;
+
+                    totalCutLengthAll += matTotalCutLen;
+                    totalStockLengthAll += matTotalStockLen;
+                    totalBoardsCount += matTotalBoards;
+                    totalReusableStockAll += matReusableLen;
+                });
+            });
+
+            Object.keys(globalMaterialSummaryAcc).forEach(mat => {
+                const acc = globalMaterialSummaryAcc[mat];
+                const matWastePct = (acc.totalStockLen - acc.reusableLen) > 0 ? ((acc.wasteLen / (acc.totalStockLen - acc.reusableLen)) * 100).toFixed(2) : 0;
+                globalSummaryByMaterial[mat] = {
+                    totalBoards: acc.totalBoards,
+                    totalStockM: (acc.totalStockLen / 1000).toFixed(2),
+                    totalCutM: (acc.totalCutLen / 1000).toFixed(2),
+                    wasteM: (acc.wasteLen / 1000).toFixed(2),
+                    reusableM: (acc.reusableLen / 1000).toFixed(2),
+                    wastePct: matWastePct
+                };
+            });
+
+            optimizationResult = {
+                boards: allOptimizedBoards,
+                summary: globalSummaryByMaterial,
+                reusableOffcuts: allReusableOffcuts,
+                totalBoards: totalBoardsCount,
+                totalStockM: (totalStockLengthAll / 1000).toFixed(2),
+                totalCutM: (totalCutLengthAll / 1000).toFixed(2),
+                totalReusableM: (totalReusableStockAll / 1000).toFixed(2),
+                overallWastePct: (totalStockLengthAll - totalReusableStockAll) > 0 ? (((totalStockLengthAll - totalCutLengthAll - totalReusableStockAll) / (totalStockLengthAll - totalReusableStockAll)) * 100).toFixed(2) : 0
+            };
+
+            // Reorder membersJsonData to reflect the batched optimization sequence while keeping ALL members across all trusses
+            let reorderedMembers = [];
+            allOptimizedBoards.forEach(board => {
+                board.cuts.forEach(cutMember => {
+                    reorderedMembers.push(cutMember);
+                });
+            });
+            membersJsonData.forEach(m => {
+                if (!reorderedMembers.some(rm => (rm.id && rm.id === m.id) || (rm.ID && rm.ID === m.ID) || rm === m)) {
+                    reorderedMembers.push(m);
+                }
+            });
+            membersJsonData = reorderedMembers;
+
+            renderOptimizationResultsUI();
+            if (limitN) {
+                showToast(`Optimized across ${trussBatches.length} truss batch group(s) of ${limitN}!`);
+            } else {
+                showToast("1D Bin-Packing Optimization completed successfully!");
+            }
+        }
+    function renderOptimizationResultsUI() {
+            if (!optimizationResult) return;
+
+            const metricsContainer = document.getElementById('opt-summary-metrics');
+            metricsContainer.innerHTML = `
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400 block">Total Boards</span>
+                    <span class="text-xl font-bold text-white">${optimizationResult.totalBoards}</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400 block">Total Stock Length</span>
+                    <span class="text-xl font-bold text-white">${optimizationResult.totalStockM} m</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400 block">Reusable Stock</span>
+                    <span class="text-xl font-bold text-emerald-400">${optimizationResult.totalReusableM} m</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400 block">True Waste %</span>
+                    <span class="text-xl font-bold text-red-500">${optimizationResult.overallWastePct}%</span>
+                </div>
+            `;
+            document.getElementById('optimization-results-summary').classList.remove('hidden');
+
+            const summaryBody = document.getElementById('summary-table-body');
+            summaryBody.innerHTML = '';
+            Object.keys(optimizationResult.summary).forEach(mat => {
+                const s = optimizationResult.summary[mat];
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-900/50 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-3 px-4 font-semibold text-white">${mat}</td>
+                    <td class="py-3 px-4 text-center font-medium">${s.totalBoards}</td>
+                    <td class="py-3 px-4 text-right font-mono">${s.totalStockM}</td>
+                    <td class="py-3 px-4 text-right font-mono">${s.totalCutM}</td>
+                    <td class="py-3 px-4 text-right font-mono">${s.wasteM}</td>
+                    <td class="py-3 px-4 text-right font-mono text-emerald-400">${s.reusableM}</td>
+                    <td class="py-3 px-4 text-right font-semibold text-red-500">${s.wastePct}%</td>
+                `;
+                summaryBody.appendChild(tr);
+            });
+
+            const reusableBody = document.getElementById('reusable-stock-body');
+            reusableBody.innerHTML = '';
+            if (optimizationResult.reusableOffcuts.length === 0) {
+                reusableBody.innerHTML = `<tr><td colspan="4" class="py-4 text-center text-slate-500 italic">No offcuts exceed the maximum waste threshold.</td></tr>`;
+            } else {
+                optimizationResult.reusableOffcuts.forEach(o => {
+                    const tr = document.createElement('tr');
+                    tr.className = "hover:bg-slate-900/50 transition-colors";
+                    tr.innerHTML = `
+                        <td class="py-3 px-4 font-semibold text-slate-300">${o.material}</td>
+                        <td class="py-3 px-4 text-center text-red-500 font-bold">Board #${o.boardIndex}</td>
+                        <td class="py-3 px-4 text-right font-medium text-emerald-400">${o.length} mm</td>
+                        <td class="py-3 px-4 text-slate-300"><span class="bg-emerald-950/80 border border-emerald-500/30 text-emerald-400 px-2 py-0.5 rounded text-xs font-semibold">Returned to Stock</span></td>
+                    `;
+                    reusableBody.appendChild(tr);
+                });
+            }
+
+            const detailBody = document.getElementById('detailed-schedule-body');
+            detailBody.innerHTML = '';
+            optimizationResult.boards.forEach(b => {
+                const cutsStr = b.cuts.map(c => `${c.lengthNormalized}mm`).join(' → ');
+                const labelsStr = b.cuts.map(c => {
+                    const mName = c.member || c.ID || 'Member';
+                    const tName = c.truss ? ` (${c.truss})` : '';
+                    return `${mName}${tName}`;
+                }).join(', ');
+                const remnantBadge = b.isReusable 
+                    ? `<span class="text-emerald-400 font-semibold">${b.remnant} mm (Reusable)</span>` 
+                    : `<span class="text-slate-400">${b.remnant} mm (Waste)</span>`;
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-900/50 transition-colors";
+                tr.innerHTML = `
+                    <td class="py-3 px-4 font-semibold text-slate-300">${b.material}</td>
+                    <td class="py-3 px-4 text-center text-red-500 font-bold">Board #${b.boardIndex}</td>
+                    <td class="py-3 px-4 text-right font-medium text-white">${b.stockLength} mm</td>
+                    <td class="py-3 px-4 text-slate-200">${cutsStr}</td>
+                    <td class="py-3 px-4 text-red-300/90 font-medium">${labelsStr}</td>
+                    <td class="py-3 px-4 text-right">${remnantBadge}</td>
+                `;
+                detailBody.appendChild(tr);
+            });
+        }
+
+        // Export Optimized .PSF File
+        async function exportPSFFile() {
+            if (!loadedZip || membersJsonData.length === 0) {
+                showToast("No active project loaded or optimization not run.", 'error');
+                return;
+            }
+
+            try {
+                let exportData = membersJsonData;
+                const originalMembersFileText = await loadedZip.file("members.json").async('text');
+                const originalParsed = JSON.parse(originalMembersFileText);
+
+                if (Array.isArray(originalParsed)) {
+                    exportData = membersJsonData;
+                } else if (originalParsed && typeof originalParsed === 'object') {
+                    exportData = JSON.parse(JSON.stringify(originalParsed));
+                    const arrayKey = Object.keys(exportData).find(k => Array.isArray(exportData[k])) || 'members';
+                    exportData[arrayKey] = membersJsonData;
+                }
+
+                loadedZip.file("members.json", JSON.stringify(exportData, null, 2));
+                const content = await loadedZip.generateAsync({ type: "blob" });
+                
+                const downloadUrl = URL.createObjectURL(content);
+                const a = document.createElement('a');
+                a.href = downloadUrl;
+                a.download = currentFileName.replace(/\.[^/.]+$/, "") + "_optimized.psf";
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(downloadUrl);
+
+                showToast("Optimized .PSF file downloaded successfully!");
+            } catch (err) {
+                console.error(err);
+                showToast("Failed to generate PSF file export.", 'error');
+            }
+        }
+
+        // Export Excel Cutting Schedule (.xlsx)
+        function exportExcelSchedule() {
+            if (!optimizationResult) {
+                showToast("Please run the optimizer first before exporting schedule.", 'error');
+                return;
+            }
+
+            try {
+                const wb = XLSX.utils.book_new();
+
+                let summaryRows = [
+                    ["PBA OPTIMIZER - TIMBER TRUSS CUTTING SCHEDULE & REUSABLE STOCK REPORT"],
+                    ["Generated by PBA Optimizer"],
+                    [],
+                    ["Material / Grade", "Total Boards", "Total Stock Length (m)", "Total Cut Length (m)", "Waste (m)", "Reusable Stock (m)", "Waste Percentage (%)"]
+                ];
+
+                Object.keys(optimizationResult.summary).forEach(mat => {
+                    const s = optimizationResult.summary[mat];
+                    summaryRows.push([
+                        mat,
+                        Number(s.totalBoards),
+                        Number(s.totalStockM),
+                        Number(s.totalCutM),
+                        Number(s.wasteM),
+                        Number(s.reusableM),
+                        Number(s.wastePct) / 100
+                    ]);
+                });
+
+                const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+                XLSX.utils.book_append_sheet(wb, wsSummary, "Summary & Waste");
+
+                let detailRows = [
+                    ["DETAILED BOARD-BY-BOARD CUTTING SEQUENCE & MEMBER LABELS"],
+                    [],
+                    ["Material", "Board #", "Stock Length (mm)", "Cut Sequence (Lengths mm)", "Member & Truss Labels", "Remnant / Offcut (mm)", "Classification"]
+                ];
+
+                optimizationResult.boards.forEach(b => {
+                    const cutsStr = b.cuts.map(c => `${c.lengthNormalized}mm`).join(', ');
+                    const labelsStr = b.cuts.map(c => {
+                        const mName = c.member || c.ID || 'Member';
+                        const tName = c.truss ? ` (${c.truss})` : '';
+                        return `${mName}${tName}`;
+                    }).join(', ');
+                    detailRows.push([
+                        b.material,
+                        b.boardIndex,
+                        b.stockLength,
+                        cutsStr,
+                        labelsStr,
+                        b.remnant,
+                        b.isReusable ? "Reusable Stock" : "Waste"
+                    ]);
+                });
+
+                const wsDetail = XLSX.utils.aoa_to_sheet(detailRows);
+                XLSX.utils.book_append_sheet(wb, wsDetail, "Cutting Sequence");
+
+                XLSX.writeFile(wb, currentFileName.replace(/\.[^/.]+$/, "") + "_Cutting_Schedule.xlsx");
+                showToast("Excel cutting schedule exported successfully!");
+            } catch (err) {
+                console.error(err);
+                showToast("Failed to generate Excel export.", 'error');
+            }
+        }
+    
+        // Print Consolidated Stock Draw
+        function printConsolidatedStockDraw() {
+            if (!optimizationResult) {
+                showToast("Please run the optimizer first before printing stock draw.", 'error');
+                return;
+            }
+
+            let printWindow = window.open('', '_blank');
+            let htmlContent = `
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Consolidated Stock Draw Report - PBA Optimizer</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; color: #111; }
+                        h1 { font-size: 20px; margin-bottom: 5px; }
+                        p { font-size: 12px; color: #555; margin-bottom: 20px; }
+                        table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
+                        th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+                        th { background-color: #f4f4f4; }
+                        .text-right { text-align: right; }
+                        .text-center { text-align: center; }
+                        @media print {
+                            button { display: none; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>PBA OPTIMIZER - CONSOLIDATED STOCK DRAW REPORT</h1>
+                    <p>Project File: ${currentFileName} | Generated: ${new Date().toLocaleString()}</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Material / Grade</th>
+                                <th class="text-center">Total Boards</th>
+                                <th class="text-right">Stock Length (mm)</th>
+                                <th class="text-right">Total Stock Length (m)</th>
+                                <th class="text-right">Total Cut Length (m)</th>
+                                <th class="text-right">Reusable Stock (m)</th>
+                                <th class="text-right">Waste (m)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            Object.keys(optimizationResult.summary).forEach(mat => {
+                const s = optimizationResult.summary[mat];
+                let stockBreakdown = {};
+                optimizationResult.boards.filter(b => b.material === mat).forEach(b => {
+                    stockBreakdown[b.stockLength] = (stockBreakdown[b.stockLength] || 0) + 1;
+                });
+
+                Object.keys(stockBreakdown).sort((a,b)=>b-a).forEach(stockLen => {
+                    let count = stockBreakdown[stockLen];
+                    let stockM = ((count * Number(stockLen)) / 1000).toFixed(2);
+                    htmlContent += `
+                        <tr>
+                            <td><strong>${mat}</strong></td>
+                            <td class="text-center">${count}</td>
+                            <td class="text-right">${stockLen} mm</td>
+                            <td class="text-right">${stockM} m</td>
+                            <td class="text-right">-</td>
+                            <td class="text-right">-</td>
+                            <td class="text-right">-</td>
+                        </tr>
+                    `;
+                });
+            });
+
+            htmlContent += `
+                        </tbody>
+                    </table>
+                    
+                    <h3>Returned Reusable Stock (Offcuts >= Max Waste Threshold)</h3>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Material</th>
+                                <th class="text-center">Board #</th>
+                                <th class="text-right">Offcut Length (mm)</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            `;
+
+            if (optimizationResult.reusableOffcuts.length === 0) {
+                htmlContent += `<tr><td colspan="4" style="text-align: center; color: #777;">No reusable offcuts generated.</td></tr>`;
+            } else {
+                optimizationResult.reusableOffcuts.forEach(o => {
+                    htmlContent += `
+                        <tr>
+                            <td>${o.material}</td>
+                            <td class="text-center">Board #${o.boardIndex}</td>
+                            <td class="text-right">${o.length} mm</td>
+                            <td>Reusable Stock</td>
+                        </tr>
+                    `;
+                });
+            }
+
+            htmlContent += `
+                        </tbody>
+                    </table>
+                    <br>
+                    <button onclick="window.print()" style="padding: 10px 20px; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 10px;">Print Report</button>
+                    <button onclick="window.close()" style="padding: 10px 20px; background: #475569; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Close</button>
+                    <script>
+                        window.onload = function() {
+                            setTimeout(function() {
+                                window.print();
+                            }, 300);
+                        };
+                    <\/script>
+                </body>
+                </html>
+            `;
+
+            printWindow.document.write(htmlContent);
+            printWindow.document.close();
+            printWindow.focus();
+        }
+
+    
+        // Reprocess & Reset Stock from File
+        function resetStockToDefaults() {
+            const isAdmin = currentUser && currentUser.role === 'Admin';
+            if (!isAdmin) {
+                showToast("Only administrators can reset stock configurations.", 'error');
+                return;
+            }
+            if (membersJsonData.length === 0) {
+                showToast("No project file loaded. Please load a .psf file or sample data first.", 'error');
+                return;
+            }
+            if (confirm("Are you sure you want to re-scan all material descriptions/grades from the loaded project file and reset their stock lengths to defaults?")) {
+                // Re-process all members to re-discover all material descriptions and grades
+                membersJsonData.forEach(member => {
+                    const mat = member.material || member.Material || member.grade || member.Grade || "Standard Timber";
+                    const len = Number(member.length || member.Length || member.DIM || 1000);
+                    member.materialNormalized = mat;
+                    member.lengthNormalized = len;
+
+                    // Ensure every material found in the file is present in materialsConfig with default active stock lengths
+                    if (!materialsConfig[mat]) {
+                        materialsConfig[mat] = {
+                            stockLengths: DEFAULT_STOCK_LENGTHS.map(l => ({ length: l, active: true }))
+                        };
+                    } else {
+                        // Reset stock lengths for existing materials to defaults (or ensure defaults are present)
+                        materialsConfig[mat].stockLengths = DEFAULT_STOCK_LENGTHS.map(l => ({ length: l, active: true }));
+                    }
+                });
+                renderMaterialsTable();
+                showToast("Successfully re-processed all materials, grades, and stock lengths from the project file!");
+            }
+        }
+
+
+        // Reset Job / Clear Session
+        function resetJobSession() {
+            if (confirm("Are you sure you want to delete the current job and reset the software for a new job?")) {
+                loadedZip = null;
+                layoutJsonData = null;
+                membersJsonData = [];
+                materialsConfig = {};
+                optimizationResult = null;
+                currentFileName = "";
+
+                document.getElementById('loaded-filename').textContent = "No file loaded";
+                document.getElementById('file-status-badge').classList.add('hidden');
+                document.getElementById('file-status-badge').classList.remove('flex');
+                document.getElementById('upload-summary-card').classList.add('hidden');
+                document.getElementById('optimization-results-summary').classList.add('hidden');
+
+                // Clear inputs
+                const fileInputEl = document.getElementById('psf-file-input');
+                if (fileInputEl) fileInputEl.value = "";
+                const trussLimitEl = document.getElementById('opt-truss-limit');
+                if (trussLimitEl) trussLimitEl.value = "";
+
+                renderMaterialsTable();
+                switchTab('upload');
+                showToast("Job cleared successfully. Ready for a new job.");
+            }
+        }
+
+
+        // Print Visual Cut List (Graphical Board Diagrams)
+                // Print Visual Cut List (Graphical Board Diagrams with Angles & Dark High-Contrast Labels)
+                // Print Visual Cut List (Graphical Board Diagrams with Actual Member Angles & High-Contrast Labels)
+        function printVisualCutList() {
+            if (!optimizationResult || !optimizationResult.boards || optimizationResult.boards.length === 0) {
+                showToast("Please run the optimizer first before printing visual cut lists.", 'error');
+                return;
+            }
+
+            let printWindow = window.open('', '_blank');
+            let htmlContent = `
+                <!DOCTYPE html>
+                <html lang="en">
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Visual Board Cutting Diagrams - PBA Optimizer</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; padding: 20px; color: #1e293b; background: #0f172a; }
+                        h1 { font-size: 22px; margin-bottom: 5px; color: #f8fafc; }
+                        p { font-size: 13px; color: #94a3b8; margin-bottom: 20px; }
+                        .board-card {
+                            border: 1px solid #334155;
+                            border-radius: 8px;
+                            padding: 14px 18px;
+                            margin-bottom: 16px;
+                            background: #1e293b;
+                            page-break-inside: avoid;
+                            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+                        }
+                        .board-header {
+                            display: flex;
+                            justify-content: space-between;
+                            font-size: 13px;
+                            font-weight: bold;
+                            color: #f1f5f9;
+                            margin-bottom: 10px;
+                        }
+                        .board-diagram {
+                            position: relative;
+                            width: 100%;
+                            height: 52px;
+                            background: #090d16;
+                            border: 2px solid #22c55e;
+                            border-radius: 4px;
+                            display: flex;
+                            overflow: hidden;
+                            box-shadow: inset 0 2px 4px rgba(0,0,0,0.6);
+                        }
+                        .cut-segment {
+                            height: 100%;
+                            background: #10b981;
+                            border-left: 2px solid #facc15;
+                            border-right: 2px solid #facc15;
+                            margin: 0 1px;
+                            display: flex;
+                            flex-direction: column;
+                            align-items: center;
+                            justify-content: center;
+                            color: #090d16;
+                            font-weight: 800;
+                            white-space: nowrap;
+                            overflow: hidden;
+                            text-overflow: ellipsis;
+                            padding: 0 8px;
+                            box-sizing: border-box;
+                            position: relative;
+                        }
+                        .remnant-segment {
+                            height: 100%;
+                            background: #334155;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            color: #cbd5e1;
+                            font-size: 11px;
+                            font-style: italic;
+                            overflow: hidden;
+                            border-left: 1px dashed #64748b;
+                        }
+                        @media print {
+                            button { display: none; }
+                            body { background: #fff; color: #111; }
+                            .board-card { background: #f8fafc; border-color: #cbd5e1; box-shadow: none; }
+                            .board-header { color: #1e293b; }
+                            .board-diagram { background: #e2e8f0; border-color: #16a34a; }
+                            .cut-segment { background: #22c55e; color: #0f172a; border-color: #ca8a04; }
+                            .remnant-segment { background: #cbd5e1; color: #334155; }
+                        }
+                    </style>
+                </head>
+                <body>
+                    <h1>PBA OPTIMIZER - VISUAL BOARD CUTTING DIAGRAMS & MEMBER ANGLES</h1>
+                    <p>Project File: ${currentFileName} | Generated: ${new Date().toLocaleString()}</p>
+            `;
+
+            optimizationResult.boards.forEach(b => {
+                let stockLen = Number(b.stockLength);
+                let segmentsHtml = "";
+
+                b.cuts.forEach((c, cIdx) => {
+                    let cutLen = Number(c.lengthNormalized);
+                    let widthPct = (cutLen / stockLen) * 100;
+                    let mLabel = c.label || c.member || c.ID || 'Member';
+                    let tName = c.truss ? `(${c.truss})` : '';
+                    let fullLabel = `${mLabel} ${tName}`.trim();
+                    
+                    let a1 = c.angle1 ?? c.Angle1 ?? c.leftAngle ?? c.startAngle ?? c.cut1 ?? c.angleStart ?? 90;
+                    let a2 = c.angle2 ?? c.Angle2 ?? c.rightAngle ?? c.endAngle ?? c.cut2 ?? c.angleEnd ?? 90;
+
+                    let skewLeft = Math.max(0, Math.min(35, Math.abs(90 - Number(a1)) * 0.6));
+                    let skewRight = Math.max(0, Math.min(35, Math.abs(90 - Number(a2)) * 0.6));
+
+                    let leftTop = Number(a1) < 90 ? skewLeft : 0;
+                    let leftBottom = Number(a1) < 90 ? 0 : skewLeft;
+                    let rightTop = Number(a2) < 90 ? 100 - skewRight : 100;
+                    let rightBottom = Number(a2) < 90 ? 100 : 100 - skewRight;
+
+                    let clipStyle = (Number(a1) === 90 && Number(a2) === 90) ? '' : `clip-path: polygon(${leftTop}% 0%, ${rightTop}% 0%, ${rightBottom}% 100%, ${leftBottom}% 100%);`;
+
+                    let angleText = (Number(a1) === 90 && Number(a2) === 90) ? '90° / 90°' : `${a1}° / ${a2}°`;
+
+                    segmentsHtml += `
+                        <div class="cut-segment" style="width: ${widthPct}%; ${clipStyle}" title="${fullLabel} | Length: ${cutLen}mm">
+                            <div style="font-size: 11px; font-weight: 900; color: #090d16; overflow: hidden; text-overflow: ellipsis; width: 100%; text-align: center; text-shadow: 0 1px 0 rgba(255,255,255,0.6);">${fullLabel}</div>
+                            <div style="font-size: 10px; font-weight: 800; color: #1e293b; text-align: center;">${cutLen}mm</div>
+                        </div>
+                    `;
+                });
+
+                if (b.remnant > 0) {
+                    let remWidthPct = (b.remnant / stockLen) * 100;
+                    let remText = b.isReusable ? `Offcut: ${b.remnant}mm (Stock)` : `Waste: ${b.remnant}mm`;
+                    segmentsHtml += `
+                        <div class="remnant-segment" style="width: ${remWidthPct}%;">
+                            <span>${remText}</span>
+                        </div>
+                    `;
+                }
+
+                htmlContent += `
+                    <div class="board-card">
+                        <div class="board-header">
+                            <span>Material: <strong>${b.material}</strong> | Board #${b.boardIndex}</span>
+                            <span>Stock Length: <strong>${b.stockLength} mm</strong></span>
+                        </div>
+                        <div class="board-diagram" title="Stock Length: ${b.stockLength}mm">
+                            ${segmentsHtml}
+                        </div>
+                    </div>
+                `;
+            });
+
+            htmlContent += `
+                    <br>
+                    <button onclick="window.print()" style="padding: 10px 20px; background: #dc2626; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-right: 10px;">Print Visual Diagrams</button>
+                    <button onclick="window.close()" style="padding: 10px 20px; background: #475569; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Close</button>
+                    <script>
+                        window.onload = function() {
+                            setTimeout(function() {
+                                window.print();
+                            }, 300);
+                        };
+                    <\/script>
+                </body>
+                </html>
+            `;
+
+            printWindow.document.write(htmlContent);
+            printWindow.document.close();
+            printWindow.focus();
+        }
+
+</script>
+</body>
+</html>
