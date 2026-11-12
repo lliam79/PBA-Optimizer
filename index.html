@@ -255,18 +255,19 @@
                 </div>
 
                 <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-6">
-                    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6 items-start">
+                    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6 items-start">
                         <div class="space-y-2 flex flex-col justify-between h-full">
                             <div>
                                 <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Optimization Strategy</label>
                                 <select id="opt-strategy" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                                    <option value="like_member" selected>Like-Member Continuity (BFD + Consecutive)</option>
                                     <option value="bfd">Best Fit Decreasing (BFD)</option>
                                     <option value="ffd">First Fit Decreasing (FFD)</option>
                                     <option value="largest">Longest First (Descending)</option>
                                     <option value="longest_stock">Longest Stock First (LSF)</option>
                                 </select>
                             </div>
-                            <p class="text-xs text-slate-400 mt-2">Packs members into tightest fitting stock.</p>
+                            <p class="text-xs text-slate-400 mt-2">Prioritizes like member labels on consecutive boards.</p>
                         </div>
                         <div class="space-y-2 flex flex-col justify-between h-full">
                             <div>
@@ -295,6 +296,16 @@
                                 <input type="number" id="opt-truss-limit" min="1" max="100" placeholder="e.g. 5 (All if blank)" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
                             </div>
                             <p class="text-xs text-slate-400 mt-2">Optimizes members in next N trusses.</p>
+                        </div>
+                        <div class="space-y-2 flex flex-col justify-between h-full">
+                            <div>
+                                <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Separate in .PSF</label>
+                                <label class="flex items-center space-x-2.5 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 cursor-pointer hover:border-red-600">
+                                    <input type="checkbox" id="opt-separate-psf" checked class="rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-0">
+                                    <span class="text-xs font-semibold text-white">Split Qty to 1x</span>
+                                </label>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-2">Separates multi-qty members into individual 1x cuts in exact board order.</p>
                         </div>
                     </div>
 
@@ -1128,7 +1139,7 @@
             }
         }
 
-        // 1D Bin-Packing Optimizer Algorithm
+        // 1D Bin-Packing Optimizer Algorithm with Like-Member Consecutive Board Priority & PSF Separation
         function runOptimization() {
             if (membersJsonData.length === 0) {
                 showToast("No members loaded. Please upload a PSF file or load sample data first.", 'error');
@@ -1139,6 +1150,8 @@
             const kerf = Number(document.getElementById('opt-kerf').value) || 0;
             const maxWasteThreshold = Number(document.getElementById('opt-max-waste').value) || 300;
             const trussLimitInput = document.getElementById('opt-truss-limit').value.trim();
+            const separatePsfEl = document.getElementById('opt-separate-psf');
+            const separateInPsf = separatePsfEl ? separatePsfEl.checked : true;
 
             let limitN = null;
             if (trussLimitInput !== "") {
@@ -1148,9 +1161,12 @@
                 }
             }
 
+            // Use original file order (_sourceIndex) so re-running optimization is 100% deterministic
+            const sourceOrderedMembers = membersJsonData.slice().sort((a, b) => (a._sourceIndex || 0) - (b._sourceIndex || 0));
+
             // Identify unique trusses in order of appearance
             let uniqueTrusses = [];
-            membersJsonData.forEach(m => {
+            sourceOrderedMembers.forEach(m => {
                 let tName = m.truss || m.Truss || m.assembly || m.Assembly || 'General';
                 if (!uniqueTrusses.includes(tName)) {
                     uniqueTrusses.push(tName);
@@ -1178,9 +1194,9 @@
 
             let globalMaterialSummaryAcc = {};
 
-            // Process batch by batch in order of truss appearance so that members are grouped and optimized by truss batch then material
+            // Process batch by batch in order of truss appearance
             trussBatches.forEach((batchTrusses, bIdx) => {
-                let batchMembers = membersJsonData.filter(m => {
+                let batchMembers = sourceOrderedMembers.filter(m => {
                     let tName = m.truss || m.Truss || m.assembly || m.Assembly || 'General';
                     return batchTrusses.includes(tName);
                 });
@@ -1191,12 +1207,16 @@
                 batchMembers.forEach(m => {
                     const mat = m.materialNormalized;
                     const qty = m.quantityNormalized || Math.max(1, Number(m.quantity ?? m.Quantity ?? 1) || 1);
+                    const mName = m.member || m.label || m.ID || 'Member';
+                    const tName = m.truss || m.Truss || m.assembly || m.Assembly || '';
+                    const likeKey = `${mName}||${tName}||${m.lengthNormalized}`;
                     if (!groups[mat]) groups[mat] = [];
                     for (let qIdx = 0; qIdx < qty; qIdx++) {
                         groups[mat].push({
                             ...m,
                             _pieceNumber: qIdx + 1,
-                            _totalQuantity: qty
+                            _totalQuantity: qty,
+                            _likeKey: likeKey
                         });
                     }
                 });
@@ -1208,18 +1228,58 @@
 
                     if (activeStocks.length === 0) return;
 
-                    if (strategy === 'bfd' || strategy === 'ffd' || strategy === 'largest') {
-                        members.sort((a, b) => b.lengthNormalized - a.lengthNormalized);
+                    if (strategy === 'like_member' || strategy === 'bfd' || strategy === 'ffd' || strategy === 'largest') {
+                        // Sort strictly by length descending, then original _sourceIndex, then piece number
+                        members.sort((a, b) => {
+                            if (b.lengthNormalized !== a.lengthNormalized) return b.lengthNormalized - a.lengthNormalized;
+                            if (a._sourceIndex !== b._sourceIndex) return (a._sourceIndex || 0) - (b._sourceIndex || 0);
+                            return a._pieceNumber - b._pieceNumber;
+                        });
                     }
 
                     let bins = [];
+                    let lastPlacedBinIdx = -1;
+                    let lastPlacedLikeKey = null;
 
                     members.forEach(member => {
                         const memberSpacing = Number(document.getElementById('opt-member-spacing').value) || 0;
                         const needed = member.lengthNormalized + kerf + memberSpacing;
                         let placed = false;
 
-                        if (strategy === 'bfd') {
+                        if (strategy === 'like_member') {
+                            // Find the tightest BFD remnant across all existing bins first
+                            let bestBfdIdx = -1;
+                            let minRemainingAfter = Infinity;
+                            bins.forEach((bin, binIdx) => {
+                                if (bin.remnant >= needed) {
+                                    const remAfter = bin.remnant - needed;
+                                    if (remAfter < minRemainingAfter) {
+                                        minRemainingAfter = remAfter;
+                                        bestBfdIdx = binIdx;
+                                    }
+                                }
+                            });
+
+                            let chosenBinIdx = bestBfdIdx;
+
+                            // If we just cut the same _likeKey on lastPlacedBinIdx, keep the run consecutive
+                            // on the same board or immediately next board as long as it doesn't waste stock (within 50mm of best BFD fit)
+                            if (member._likeKey === lastPlacedLikeKey && lastPlacedBinIdx !== -1 && bestBfdIdx !== -1) {
+                                if (bins[lastPlacedBinIdx].remnant >= needed && (bins[lastPlacedBinIdx].remnant - needed) <= minRemainingAfter + 50) {
+                                    chosenBinIdx = lastPlacedBinIdx;
+                                } else if ((lastPlacedBinIdx + 1) < bins.length && bins[lastPlacedBinIdx + 1].remnant >= needed && (bins[lastPlacedBinIdx + 1].remnant - needed) <= minRemainingAfter + 50) {
+                                    chosenBinIdx = lastPlacedBinIdx + 1;
+                                }
+                            }
+
+                            if (chosenBinIdx !== -1) {
+                                bins[chosenBinIdx].cuts.push(member);
+                                bins[chosenBinIdx].remnant -= needed;
+                                lastPlacedBinIdx = chosenBinIdx;
+                                lastPlacedLikeKey = member._likeKey;
+                                placed = true;
+                            }
+                        } else if (strategy === 'bfd') {
                             let bestBinIdx = -1;
                             let minRemainingAfter = Infinity;
 
@@ -1270,7 +1330,77 @@
                                 cuts: [member],
                                 remnant: chosenStock - member.lengthNormalized
                             });
+                            lastPlacedBinIdx = bins.length - 1;
+                            lastPlacedLikeKey = member._likeKey;
                         }
+                    });
+
+                    // Board-to-Board Like-Member Continuity Chaining:
+                    // Chains consecutive boards that share the same member label (e.g. BC.1 M2 [1/5..5/5])
+                    // while respecting stock-length tiers so small offcut fillers on 5400mm boards don't pull 3600mm boards out of order.
+                    if (strategy === 'like_member' && bins.length > 1) {
+                        let orderedBins = [];
+                        let unvisited = bins.slice();
+                        let activeKeys = [];
+                        let lastStockLen = null;
+
+                        while (unvisited.length > 0) {
+                            activeKeys = activeKeys.filter(k =>
+                                unvisited.some(b => b.cuts.some(c => c._likeKey === k))
+                            );
+
+                            let chosenIdx = 0;
+                            if (activeKeys.length > 0) {
+                                let bestScore = -1;
+                                for (let uIdx = 0; uIdx < unvisited.length; uIdx++) {
+                                    const candidate = unvisited[uIdx];
+                                    const bKeys = new Set(candidate.cuts.map(c => c._likeKey));
+                                    const primaryKey = candidate.cuts[0]._likeKey;
+
+                                    let score = -1;
+                                    // Match on activeKeys[0] as the primary cut on the candidate board, or on a board of the same stock length
+                                    if (primaryKey === activeKeys[0]) {
+                                        score = 2000;
+                                    } else if (bKeys.has(activeKeys[0]) && candidate.stockLength === lastStockLen) {
+                                        score = 1500;
+                                    } else if (candidate.stockLength === lastStockLen) {
+                                        for (let kIdx = 1; kIdx < activeKeys.length; kIdx++) {
+                                            if (bKeys.has(activeKeys[kIdx])) {
+                                                score = Math.max(score, 800 - kIdx * 50);
+                                            }
+                                        }
+                                    }
+
+                                    if (score > bestScore) {
+                                        bestScore = score;
+                                        chosenIdx = uIdx;
+                                    }
+                                }
+                            }
+
+                            const nextBin = unvisited.splice(chosenIdx, 1)[0];
+                            orderedBins.push(nextBin);
+                            lastStockLen = nextBin.stockLength;
+
+                            nextBin.cuts.forEach(c => {
+                                if (c._likeKey && !activeKeys.includes(c._likeKey)) {
+                                    activeKeys.push(c._likeKey);
+                                }
+                            });
+                        }
+
+                        bins = orderedBins;
+                    }
+
+                    // Always renumber _pieceNumber sequentially (1/N, 2/N, ..., N/N) in final board order for ALL strategies
+                    // so the Cutting Schedule, Excel Export, Visual Cut List, and PSF always show [1/N]..[N/N] in exact board order!
+                    const pieceCounters = {};
+                    bins.forEach(b => {
+                        b.cuts.forEach(c => {
+                            const k = c._likeKey;
+                            pieceCounters[k] = (pieceCounters[k] || 0) + 1;
+                            c._pieceNumber = pieceCounters[k];
+                        });
                     });
 
                     let matTotalBoards = bins.length;
@@ -1354,32 +1484,9 @@
                 totalStockM: (totalStockLengthAll / 1000).toFixed(2),
                 totalCutM: (totalCutLengthAll / 1000).toFixed(2),
                 totalReusableM: (totalReusableStockAll / 1000).toFixed(2),
-                overallWastePct: (totalStockLengthAll - totalReusableStockAll) > 0 ? (((totalStockLengthAll - totalCutLengthAll - totalReusableStockAll) / (totalStockLengthAll - totalReusableStockAll)) * 100).toFixed(2) : 0
+                overallWastePct: (totalStockLengthAll - totalReusableStockAll) > 0 ? (((totalStockLengthAll - totalCutLengthAll - totalReusableStockAll) / (totalStockLengthAll - totalReusableStockAll)) * 100).toFixed(2) : 0,
+                separateInPsf: separateInPsf
             };
-
-            // Reorder membersJsonData to reflect the batched optimization sequence while keeping unique member records (with original quantity intact) for .PSF export
-            let reorderedMembers = [];
-            let seenSourceIndices = new Set();
-            allOptimizedBoards.forEach(board => {
-                board.cuts.forEach(cutMember => {
-                    const sIdx = cutMember._sourceIndex;
-                    if (sIdx !== undefined && !seenSourceIndices.has(sIdx)) {
-                        seenSourceIndices.add(sIdx);
-                        const origMember = membersJsonData.find(m => m._sourceIndex === sIdx) || cutMember;
-                        reorderedMembers.push(origMember);
-                    }
-                });
-            });
-            membersJsonData.forEach(m => {
-                if (m._sourceIndex !== undefined && !seenSourceIndices.has(m._sourceIndex)) {
-                    seenSourceIndices.add(m._sourceIndex);
-                    reorderedMembers.push(m);
-                } else if (m._sourceIndex === undefined && !reorderedMembers.includes(m)) {
-                    reorderedMembers.push(m);
-                }
-            });
-            reorderedMembers.forEach((m, idx) => { m._sourceIndex = idx; });
-            membersJsonData = reorderedMembers;
 
             renderOptimizationResultsUI();
             if (limitN) {
@@ -1476,24 +1583,87 @@
             });
         }
 
-        // Export Optimized .PSF File
+        // Export Optimized .PSF File (Supports separating multi-quantity members into individual 1x cuts in exact board order)
         async function exportPSFFile() {
-            if (!loadedZip || membersJsonData.length === 0) {
+            if (!loadedZip || !optimizationResult || !optimizationResult.boards || optimizationResult.boards.length === 0) {
                 showToast("No active project loaded or optimization not run.", 'error');
                 return;
             }
 
             try {
-                let exportData = membersJsonData;
+                const separatePsfEl = document.getElementById('opt-separate-psf');
+                const separateInPsf = separatePsfEl ? separatePsfEl.checked : true;
+
+                let exportMembersArray = [];
+
+                if (separateInPsf) {
+                    // Find max numeric ID so any split members receive a clean unique ID if needed
+                    let maxNumericId = 1000000;
+                    membersJsonData.forEach(m => {
+                        if (typeof m.ID === 'number' && m.ID > maxNumericId) maxNumericId = m.ID;
+                    });
+                    let usedIds = new Set();
+
+                    // Separate every physical cut on every board into its own individual member entry (quantity = 1)
+                    // in the exact board-by-board cutting order so the sawyer never has to search the list!
+                    optimizationResult.boards.forEach(board => {
+                        board.cuts.forEach(cutMember => {
+                            let cloned = JSON.parse(JSON.stringify(cutMember));
+                            if ('quantity' in cloned) cloned.quantity = 1;
+                            if ('Quantity' in cloned) cloned.Quantity = 1;
+                            if (!('quantity' in cloned) && !('Quantity' in cloned)) cloned.quantity = 1;
+
+                            if ('ID' in cloned) {
+                                if (usedIds.has(cloned.ID)) {
+                                    cloned.ID = ++maxNumericId;
+                                }
+                                usedIds.add(cloned.ID);
+                            }
+
+                            delete cloned.materialNormalized;
+                            delete cloned.lengthNormalized;
+                            delete cloned.quantityNormalized;
+                            delete cloned._sourceIndex;
+                            delete cloned._pieceNumber;
+                            delete cloned._totalQuantity;
+                            delete cloned._likeKey;
+
+                            exportMembersArray.push(cloned);
+                        });
+                    });
+                } else {
+                    // Keep grouped multi-quantity members (deduplicated by original _sourceIndex in order of first board appearance)
+                    let seenSourceIndices = new Set();
+                    optimizationResult.boards.forEach(board => {
+                        board.cuts.forEach(cutMember => {
+                            const sIdx = cutMember._sourceIndex;
+                            if (sIdx !== undefined && !seenSourceIndices.has(sIdx)) {
+                                seenSourceIndices.add(sIdx);
+                                const origMember = membersJsonData.find(m => m._sourceIndex === sIdx) || cutMember;
+                                let cloned = JSON.parse(JSON.stringify(origMember));
+                                delete cloned.materialNormalized;
+                                delete cloned.lengthNormalized;
+                                delete cloned.quantityNormalized;
+                                delete cloned._sourceIndex;
+                                delete cloned._pieceNumber;
+                                delete cloned._totalQuantity;
+                                delete cloned._likeKey;
+                                exportMembersArray.push(cloned);
+                            }
+                        });
+                    });
+                }
+
+                let exportData = exportMembersArray;
                 const originalMembersFileText = await loadedZip.file("members.json").async('text');
                 const originalParsed = JSON.parse(originalMembersFileText);
 
                 if (Array.isArray(originalParsed)) {
-                    exportData = membersJsonData;
+                    exportData = exportMembersArray;
                 } else if (originalParsed && typeof originalParsed === 'object') {
                     exportData = JSON.parse(JSON.stringify(originalParsed));
                     const arrayKey = Object.keys(exportData).find(k => Array.isArray(exportData[k])) || 'members';
-                    exportData[arrayKey] = membersJsonData;
+                    exportData[arrayKey] = exportMembersArray;
                 }
 
                 loadedZip.file("members.json", JSON.stringify(exportData, null, 2));
@@ -1508,7 +1678,7 @@
                 document.body.removeChild(a);
                 URL.revokeObjectURL(downloadUrl);
 
-                showToast("Optimized .PSF file downloaded successfully!");
+                showToast(`Optimized .PSF exported (${exportMembersArray.length} ordered member entries)!`);
             } catch (err) {
                 console.error(err);
                 showToast("Failed to generate PSF file export.", 'error');
