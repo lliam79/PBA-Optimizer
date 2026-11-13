@@ -1240,6 +1240,16 @@
                     let bins = [];
                     let lastPlacedBinIdx = -1;
                     let lastPlacedLikeKey = null;
+                    const maxActiveStock = activeStocks[0]; // activeStocks is sorted descending (e.g. [6000, 5400])
+
+                    // Helper: smallest active stock length that can hold `usedLen`
+                    function getSmallestFittingStock(usedLen) {
+                        if (strategy === 'longest_stock') return maxActiveStock;
+                        for (let sIdx = activeStocks.length - 1; sIdx >= 0; sIdx--) {
+                            if (activeStocks[sIdx] >= usedLen) return activeStocks[sIdx];
+                        }
+                        return maxActiveStock;
+                    }
 
                     members.forEach(member => {
                         const memberSpacing = Number(document.getElementById('opt-member-spacing').value) || 0;
@@ -1247,12 +1257,14 @@
                         let placed = false;
 
                         if (strategy === 'like_member') {
-                            // Find the tightest BFD remnant across all existing bins first
+                            // Find the tightest BFD remnant across all existing bins, allowing dynamic stock promotion up to maxActiveStock (e.g. 5400 -> 6000mm)
                             let bestBfdIdx = -1;
                             let minRemainingAfter = Infinity;
                             bins.forEach((bin, binIdx) => {
-                                if (bin.remnant >= needed) {
-                                    const remAfter = bin.remnant - needed;
+                                const newUsed = bin.usedLength + needed;
+                                if (newUsed <= maxActiveStock) {
+                                    const targetStock = getSmallestFittingStock(newUsed);
+                                    const remAfter = targetStock - newUsed;
                                     if (remAfter < minRemainingAfter) {
                                         minRemainingAfter = remAfter;
                                         bestBfdIdx = binIdx;
@@ -1263,18 +1275,30 @@
                             let chosenBinIdx = bestBfdIdx;
 
                             // If we just cut the same _likeKey on lastPlacedBinIdx, keep the run consecutive
-                            // on the same board or immediately next board as long as it doesn't waste stock (within 50mm of best BFD fit)
+                            // on the same board or immediately next board as long as it fits (up to maxActiveStock) within 50mm of best BFD fit
                             if (member._likeKey === lastPlacedLikeKey && lastPlacedBinIdx !== -1 && bestBfdIdx !== -1) {
-                                if (bins[lastPlacedBinIdx].remnant >= needed && (bins[lastPlacedBinIdx].remnant - needed) <= minRemainingAfter + 50) {
-                                    chosenBinIdx = lastPlacedBinIdx;
-                                } else if ((lastPlacedBinIdx + 1) < bins.length && bins[lastPlacedBinIdx + 1].remnant >= needed && (bins[lastPlacedBinIdx + 1].remnant - needed) <= minRemainingAfter + 50) {
-                                    chosenBinIdx = lastPlacedBinIdx + 1;
+                                const checkCandidates = [lastPlacedBinIdx, lastPlacedBinIdx + 1];
+                                for (let cIdx = 0; cIdx < checkCandidates.length; cIdx++) {
+                                    const candBinIdx = checkCandidates[cIdx];
+                                    if (candBinIdx < bins.length) {
+                                        const candNewUsed = bins[candBinIdx].usedLength + needed;
+                                        if (candNewUsed <= maxActiveStock) {
+                                            const candStock = getSmallestFittingStock(candNewUsed);
+                                            const candRem = candStock - candNewUsed;
+                                            if (candRem <= minRemainingAfter + 50) {
+                                                chosenBinIdx = candBinIdx;
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
                             if (chosenBinIdx !== -1) {
                                 bins[chosenBinIdx].cuts.push(member);
-                                bins[chosenBinIdx].remnant -= needed;
+                                bins[chosenBinIdx].usedLength += needed;
+                                bins[chosenBinIdx].stockLength = getSmallestFittingStock(bins[chosenBinIdx].usedLength);
+                                bins[chosenBinIdx].remnant = bins[chosenBinIdx].stockLength - bins[chosenBinIdx].usedLength;
                                 lastPlacedBinIdx = chosenBinIdx;
                                 lastPlacedLikeKey = member._likeKey;
                                 placed = true;
@@ -1284,8 +1308,10 @@
                             let minRemainingAfter = Infinity;
 
                             bins.forEach((bin, binIdx) => {
-                                if (bin.remnant >= needed) {
-                                    const remAfter = bin.remnant - needed;
+                                const newUsed = bin.usedLength + needed;
+                                if (newUsed <= maxActiveStock) {
+                                    const targetStock = getSmallestFittingStock(newUsed);
+                                    const remAfter = targetStock - newUsed;
                                     if (remAfter < minRemainingAfter) {
                                         minRemainingAfter = remAfter;
                                         bestBinIdx = binIdx;
@@ -1295,14 +1321,19 @@
 
                             if (bestBinIdx !== -1) {
                                 bins[bestBinIdx].cuts.push(member);
-                                bins[bestBinIdx].remnant -= needed;
+                                bins[bestBinIdx].usedLength += needed;
+                                bins[bestBinIdx].stockLength = getSmallestFittingStock(bins[bestBinIdx].usedLength);
+                                bins[bestBinIdx].remnant = bins[bestBinIdx].stockLength - bins[bestBinIdx].usedLength;
                                 placed = true;
                             }
                         } else {
                             for (let i = 0; i < bins.length; i++) {
-                                if (bins[i].remnant >= needed) {
+                                const newUsed = bins[i].usedLength + needed;
+                                if (newUsed <= maxActiveStock) {
                                     bins[i].cuts.push(member);
-                                    bins[i].remnant -= needed;
+                                    bins[i].usedLength = newUsed;
+                                    bins[i].stockLength = getSmallestFittingStock(newUsed);
+                                    bins[i].remnant = bins[i].stockLength - newUsed;
                                     placed = true;
                                     break;
                                 }
@@ -1310,25 +1341,15 @@
                         }
 
                         if (!placed) {
-                            let chosenStock = activeStocks[activeStocks.length - 1];
-                            if (strategy === 'longest_stock') {
-                                chosenStock = activeStocks[0];
-                            } else {
-                                for (let i = activeStocks.length - 1; i >= 0; i--) {
-                                    if (activeStocks[i] >= member.lengthNormalized) {
-                                        chosenStock = activeStocks[i];
-                                        break;
-                                    }
-                                }
-                                if (member.lengthNormalized > chosenStock) {
-                                    chosenStock = activeStocks[0];
-                                }
-                            }
+                            const memberSpacingInit = Number(document.getElementById('opt-member-spacing').value) || 0;
+                            const initUsed = member.lengthNormalized + memberSpacingInit;
+                            const chosenStock = getSmallestFittingStock(initUsed);
 
                             bins.push({
                                 stockLength: chosenStock,
+                                usedLength: initUsed,
                                 cuts: [member],
-                                remnant: chosenStock - member.lengthNormalized
+                                remnant: chosenStock - initUsed
                             });
                             lastPlacedBinIdx = bins.length - 1;
                             lastPlacedLikeKey = member._likeKey;
