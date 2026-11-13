@@ -10,6 +10,13 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <!-- SheetJS (xlsx) for exporting Excel cutting schedules -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- PDF.js for parsing Pryda Timber Report costing PDFs -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script>
+        if (typeof pdfjsLib !== 'undefined') {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        }
+    </script>
     <!-- FontAwesome for icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google Fonts Inter -->
@@ -115,9 +122,13 @@
                     <i class="fa-solid fa-table-list w-5 text-center"></i>
                     <span>4. Cutting Schedule</span>
                 </button>
+                <button onclick="switchTab('costing')" id="nav-costing" class="w-full flex items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200">
+                    <i class="fa-solid fa-file-invoice-dollar w-5 text-center"></i>
+                    <span>5. Timber Costing</span>
+                </button>
                 <button onclick="switchTab('users')" id="nav-users" class="w-full hidden items-center space-x-3 px-3.5 py-3 rounded-xl text-sm font-semibold transition-all text-slate-400 hover:bg-slate-900 hover:text-slate-200">
                     <i class="fa-solid fa-users-gear w-5 text-center"></i>
-                    <span>5. Operator Management</span>
+                    <span>6. Operator Management</span>
                 </button>
             </nav>
 
@@ -400,6 +411,7 @@
                                     <th class="py-3 px-4 text-right">Waste (m)</th>
                                     <th class="py-3 px-4 text-right">Reusable Stock (m)</th>
                                     <th class="py-3 px-4 text-right">Waste %</th>
+                                    <th class="py-3 px-4 text-right">Total Cost ($)</th>
                                 </tr>
                             </thead>
                             <tbody id="summary-table-body" class="divide-y divide-slate-800/80">
@@ -448,6 +460,7 @@
                                     <th class="py-3 px-4">Cut Sequence (Lengths in mm)</th>
                                     <th class="py-3 px-4">Member Labels</th>
                                     <th class="py-3 px-4 text-right">Remnant / Waste (mm)</th>
+                                    <th class="py-3 px-4 text-right">Board Cost ($)</th>
                                 </tr>
                             </thead>
                             <tbody id="detailed-schedule-body" class="divide-y divide-slate-800/80 font-mono text-xs">
@@ -464,7 +477,127 @@
                 </div>
             </section>
 
-            <!-- TAB 5: OPERATOR MANAGEMENT -->
+            <!-- TAB 5: TIMBER COSTING -->
+            <section id="tab-costing" class="max-w-6xl mx-auto space-y-6 hidden">
+                <div class="flex items-center justify-between flex-wrap gap-4">
+                    <div>
+                        <h2 class="text-2xl font-bold text-white">Timber Costing & Stock-Length Tier Allocation</h2>
+                        <p class="text-sm text-slate-400 mt-1">Upload a Pryda Timber Report PDF, choose your <code class="text-indigo-400">Timber Description:</code> costing group, and allocate tiered <code class="text-indigo-400">Stock Type</code> prices ($/lm) to each active stock length.</p>
+                    </div>
+                    <div class="flex items-center flex-wrap gap-2.5">
+                        <div id="costing-pdf-badge" class="flex items-center space-x-2 bg-slate-900 border border-slate-700 text-slate-300 px-3.5 py-2 rounded-xl text-xs font-semibold">
+                            <i id="costing-pdf-icon" class="fa-solid fa-circle-minus text-slate-400"></i>
+                            <span id="costing-pdf-status">No Costing Loaded (Blank)</span>
+                        </div>
+                        <button onclick="saveCostingToStorage(true)" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-2.5 rounded-xl text-xs transition-all shadow-md shadow-indigo-600/20 flex items-center space-x-1.5" title="Save current timber costing to browser LocalStorage">
+                            <i class="fa-solid fa-floppy-disk"></i>
+                            <span>Save Costing</span>
+                        </button>
+                        <button onclick="resetCostingToBlank()" class="bg-slate-800 hover:bg-red-950/80 hover:border-red-500/50 text-slate-200 hover:text-red-300 font-semibold px-4 py-2.5 rounded-xl text-xs border border-slate-700 transition-all flex items-center space-x-1.5" title="Clear all costing data and reset to $0.00 for privacy before distributing">
+                            <i class="fa-solid fa-eraser text-red-400"></i>
+                            <span>Reset Costing to Blank</span>
+                        </button>
+                        <button onclick="calculateTimberCosts()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition-all shadow-lg shadow-emerald-600/20 flex items-center space-x-1.5">
+                            <i class="fa-solid fa-calculator"></i>
+                            <span>Calculate & Allocate Costs</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Upload + Group Selector Row -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- PDF Costing Upload Drop Zone -->
+                    <div id="costing-drop-zone" class="lg:col-span-2 border-2 border-dashed border-slate-700 hover:border-indigo-500 bg-slate-950/60 rounded-2xl p-6 text-center transition-all cursor-pointer flex flex-col items-center justify-center space-y-3">
+                        <div class="w-12 h-12 rounded-2xl bg-indigo-600/10 text-indigo-400 flex items-center justify-center text-xl border border-indigo-600/20">
+                            <i class="fa-solid fa-file-pdf"></i>
+                        </div>
+                        <div>
+                            <p class="text-sm font-semibold text-white">Drag & drop your Pryda Timber Report PDF here</p>
+                            <p class="text-xs text-slate-400 mt-0.5">Extracts all <span class="text-slate-200 font-medium">Timber Description:</span> groups, section sizes, <span class="text-slate-200 font-medium">Stock Type</span> length tiers, and <span class="text-slate-200 font-medium">Cost L/Mtr</span> rates</p>
+                        </div>
+                        <input type="file" id="costing-pdf-input" accept=".pdf" class="hidden">
+                        <button onclick="document.getElementById('costing-pdf-input').click()" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-4 py-2 rounded-xl text-xs border border-slate-700 transition-all">
+                            <i class="fa-solid fa-folder-open mr-1.5 text-indigo-400"></i> Browse Timber Costing PDF
+                        </button>
+                    </div>
+
+                    <!-- Timber Description Group Selector Card -->
+                    <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between space-y-4">
+                        <div class="space-y-2">
+                            <label class="text-xs font-semibold text-indigo-400 uppercase tracking-wider flex items-center space-x-1.5">
+                                <i class="fa-solid fa-layer-group"></i>
+                                <span>Select Timber Costing Group</span>
+                            </label>
+                            <select id="costing-group-select" onchange="onCostingGroupChange(this.value)" class="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm font-semibold text-white focus:outline-none focus:border-indigo-500">
+                                <!-- Populated dynamically -->
+                            </select>
+                            <p class="text-xs text-slate-400 pt-1">Matches each board's stock length to the smallest <span class="text-slate-200">Stock Type &ge; Stock Length</span> in the selected group.</p>
+                        </div>
+                        <div class="bg-slate-900/90 border border-slate-800 rounded-xl p-3 text-xs text-slate-300 space-y-1">
+                            <div class="flex justify-between">
+                                <span class="text-slate-400">Active Group:</span>
+                                <span id="costing-active-group-label" class="font-bold text-indigo-400">None (Blank)</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-slate-400">Saved PDF Tiers:</span>
+                                <span id="costing-parsed-count" class="font-mono font-semibold text-white">0 rows</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Costing Summary Metric Cards -->
+                <div id="costing-summary-card" class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div class="bg-slate-950 border border-slate-800 p-5 rounded-2xl">
+                        <span class="text-xs text-slate-400 block">Total Utilized Stock Cost</span>
+                        <span id="cost-stat-total" class="text-2xl font-bold text-emerald-400">$0.00</span>
+                    </div>
+                    <div class="bg-slate-950 border border-slate-800 p-5 rounded-2xl">
+                        <span class="text-xs text-slate-400 block">Net Cost (Less Reusable Stock)</span>
+                        <span id="cost-stat-net" class="text-2xl font-bold text-indigo-400">$0.00</span>
+                    </div>
+                    <div class="bg-slate-950 border border-slate-800 p-5 rounded-2xl">
+                        <span class="text-xs text-slate-400 block">Average Cost Per Board</span>
+                        <span id="cost-stat-board" class="text-2xl font-bold text-white">$0.00</span>
+                    </div>
+                    <div class="bg-slate-950 border border-slate-800 p-5 rounded-2xl">
+                        <span class="text-xs text-slate-400 block">Weighted Avg Rate ($ / lm)</span>
+                        <span id="cost-stat-lm" class="text-2xl font-bold text-white">$0.00 / lm</span>
+                    </div>
+                </div>
+
+                <!-- Interactive Per-Stock-Length Unit Price Table -->
+                <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-4 shadow-xl">
+                    <div class="flex items-center justify-between flex-wrap gap-2">
+                        <h3 class="text-sm font-semibold text-white uppercase tracking-wider flex items-center space-x-2">
+                            <i class="fa-solid fa-tags text-indigo-400"></i>
+                            <span>Stock-Length Cost Allocation Table (Cost L/Mtr by Stock Length)</span>
+                        </h3>
+                        <span class="text-xs text-slate-400">Each stock length uses the PDF <span class="text-slate-200 font-semibold">Cost L/Mtr</span> tier where <span class="text-slate-200 font-semibold">Stock Length &le; Stock Type</span>. You can also edit any rate below.</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse text-sm">
+                            <thead>
+                                <tr class="bg-slate-900 border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                    <th class="py-3 px-4">Material Grade</th>
+                                    <th class="py-3 px-4">PDF Stock Type Tiers (in Selected Group)</th>
+                                    <th class="py-3 px-4">Allocated Cost L/Mtr ($/lm) & Board Cost ($) per Stock Length</th>
+                                </tr>
+                            </thead>
+                            <tbody id="costing-table-body" class="divide-y divide-slate-800/80">
+                                <!-- Populated dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="flex justify-between pt-2">
+                    <button onclick="switchTab('schedule')" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-5 py-2.5 rounded-xl text-sm border border-slate-700">
+                        <i class="fa-solid fa-arrow-left mr-1.5"></i> Back to Schedule
+                    </button>
+                </div>
+            </section>
+
             <section id="tab-users" class="max-w-4xl mx-auto space-y-6 hidden">
                 <div class="flex items-center justify-between flex-wrap gap-4">
                     <div>
@@ -740,6 +873,540 @@
         // Default stock lengths for auto-discovered materials
         const DEFAULT_STOCK_LENGTHS = [6000, 5400, 3600, 1800];
 
+        // Multi-Group Tiered Timber Costing State (Starts blank for privacy; persists in browser localStorage)
+        const COSTING_STORAGE_KEY = 'pba_optimizer_costing_db';
+        let pdfCostingGroups = {};
+        let selectedCostingGroup = "";
+        let timberStockPrices = {}; // Map: materialName -> { stockLengthMm: pricePerLm }
+        let loadedCostingPdfName = "";
+        let loadedCostingRowCount = 0;
+
+        function updateCostingStatusBadge() {
+            const badgeEl = document.getElementById('costing-pdf-badge');
+            const iconEl = document.getElementById('costing-pdf-icon');
+            const statusEl = document.getElementById('costing-pdf-status');
+            const activeLbl = document.getElementById('costing-active-group-label');
+            const countEl = document.getElementById('costing-parsed-count');
+
+            const groupNames = Object.keys(pdfCostingGroups || {});
+            const hasManualPrices = Object.keys(timberStockPrices || {}).some(m =>
+                Object.values(timberStockPrices[m] || {}).some(v => Number(v) > 0)
+            );
+
+            if (groupNames.length > 0) {
+                if (badgeEl) badgeEl.className = "flex items-center space-x-2 bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 px-3.5 py-2 rounded-xl text-xs font-semibold";
+                if (iconEl) iconEl.className = "fa-solid fa-file-circle-check text-indigo-400";
+                if (statusEl) statusEl.textContent = `Saved: ${loadedCostingPdfName || 'Costing PDF'} (${groupNames.length} Groups)`;
+                if (activeLbl) activeLbl.textContent = selectedCostingGroup || groupNames[0];
+                if (countEl) countEl.textContent = `${loadedCostingRowCount} rows`;
+            } else if (hasManualPrices) {
+                if (badgeEl) badgeEl.className = "flex items-center space-x-2 bg-amber-950/80 border border-amber-500/40 text-amber-300 px-3.5 py-2 rounded-xl text-xs font-semibold";
+                if (iconEl) iconEl.className = "fa-solid fa-pen-to-square text-amber-400";
+                if (statusEl) statusEl.textContent = "Custom Manual Rates (Saved)";
+                if (activeLbl) activeLbl.textContent = "Manual Rates";
+                if (countEl) countEl.textContent = "Custom";
+            } else {
+                if (badgeEl) badgeEl.className = "flex items-center space-x-2 bg-slate-900 border border-slate-700 text-slate-400 px-3.5 py-2 rounded-xl text-xs font-semibold";
+                if (iconEl) iconEl.className = "fa-solid fa-circle-minus text-slate-500";
+                if (statusEl) statusEl.textContent = "No Costing Loaded (Blank)";
+                if (activeLbl) activeLbl.textContent = "None (Blank)";
+                if (countEl) countEl.textContent = "0 rows";
+            }
+        }
+
+        function saveCostingToStorage(showNotification = false) {
+            try {
+                const payload = {
+                    groups: pdfCostingGroups,
+                    selectedGroup: selectedCostingGroup,
+                    customPrices: timberStockPrices,
+                    fileName: loadedCostingPdfName,
+                    rowCount: loadedCostingRowCount,
+                    savedAt: new Date().toISOString()
+                };
+                localStorage.setItem(COSTING_STORAGE_KEY, JSON.stringify(payload));
+                updateCostingStatusBadge();
+                if (showNotification) {
+                    showToast("Timber costing saved to browser local storage! It will be retained across sessions.");
+                }
+            } catch (e) {
+                console.warn("Could not save costing data to localStorage:", e);
+                if (showNotification) showToast("Failed to save costing to local storage.", 'error');
+            }
+        }
+
+        function loadCostingFromStorage() {
+            try {
+                const raw = localStorage.getItem(COSTING_STORAGE_KEY);
+                if (!raw) {
+                    updateCostingStatusBadge();
+                    return;
+                }
+                const saved = JSON.parse(raw);
+                if (saved && typeof saved === 'object') {
+                    pdfCostingGroups = (saved.groups && typeof saved.groups === 'object') ? saved.groups : {};
+                    selectedCostingGroup = saved.selectedGroup || "";
+                    timberStockPrices = (saved.customPrices && typeof saved.customPrices === 'object') ? saved.customPrices : {};
+                    loadedCostingPdfName = saved.fileName || "";
+                    loadedCostingRowCount = Number(saved.rowCount) || 0;
+                }
+                updateCostingStatusBadge();
+            } catch (e) {
+                console.warn("Could not load costing data from localStorage:", e);
+            }
+        }
+
+        function resetCostingToBlank() {
+            if (!confirm("Are you sure you want to reset all timber costing data to blank ($0.00)? This removes saved PDF prices and manual rates from browser storage for privacy.")) {
+                return;
+            }
+            localStorage.removeItem(COSTING_STORAGE_KEY);
+            pdfCostingGroups = {};
+            selectedCostingGroup = "";
+            timberStockPrices = {};
+            loadedCostingPdfName = "";
+            loadedCostingRowCount = 0;
+
+            const pdfInputEl = document.getElementById('costing-pdf-input');
+            if (pdfInputEl) pdfInputEl.value = "";
+
+            Object.keys(materialsConfig).forEach(matName => {
+                timberStockPrices[matName] = {};
+                (materialsConfig[matName].stockLengths || []).forEach(sObj => {
+                    timberStockPrices[matName][Number(sObj.length)] = 0.00;
+                });
+            });
+
+            updateCostingStatusBadge();
+            initCostingTable();
+
+            if (optimizationResult) {
+                calculateTimberCosts(true);
+                renderOptimizationResultsUI();
+            } else {
+                const elTotal = document.getElementById('cost-stat-total');
+                const elNet = document.getElementById('cost-stat-net');
+                const elBoard = document.getElementById('cost-stat-board');
+                const elLm = document.getElementById('cost-stat-lm');
+                if (elTotal) elTotal.textContent = '$0.00';
+                if (elNet) elNet.textContent = '$0.00';
+                if (elBoard) elBoard.textContent = '$0.00';
+                if (elLm) elLm.textContent = '$0.00 / lm';
+            }
+
+            showToast("All timber costing data reset to blank ($0.00) and cleared from browser storage.");
+        }
+
+        // Helper: Normalize section + grade string (e.g. "90x35 MGP10H2" -> tries "90x35 MGP10H2", then "90x35 MGP10")
+        function findPdfTiersForMaterial(groupName, matName) {
+            if (!groupName || !pdfCostingGroups[groupName]) return { tiers: [], sourceGroup: null };
+            const grpData = pdfCostingGroups[groupName] || {};
+            const cleanMat = String(matName || '').trim().replace(/\s+/g, ' ');
+            if (grpData[cleanMat] && grpData[cleanMat].length > 0) {
+                return { tiers: grpData[cleanMat], sourceGroup: groupName };
+            }
+            const lowerMat = cleanMat.toLowerCase();
+            for (const k of Object.keys(grpData)) {
+                if (k.toLowerCase() === lowerMat && grpData[k].length > 0) {
+                    return { tiers: grpData[k], sourceGroup: groupName };
+                }
+            }
+            const strippedMat = cleanMat.replace(/(H2|H3|T)$/i, '').trim();
+            if (grpData[strippedMat] && grpData[strippedMat].length > 0) {
+                return { tiers: grpData[strippedMat], sourceGroup: groupName };
+            }
+            for (const k of Object.keys(grpData)) {
+                if (k.toLowerCase() === strippedMat.toLowerCase() && grpData[k].length > 0) {
+                    return { tiers: grpData[k], sourceGroup: groupName };
+                }
+            }
+            for (const otherGrp of Object.keys(pdfCostingGroups)) {
+                if (otherGrp === groupName) continue;
+                const oData = pdfCostingGroups[otherGrp] || {};
+                if (oData[cleanMat] && oData[cleanMat].length > 0) {
+                    return { tiers: oData[cleanMat], sourceGroup: `${otherGrp} (Fallback)` };
+                }
+                if (oData[strippedMat] && oData[strippedMat].length > 0) {
+                    return { tiers: oData[strippedMat], sourceGroup: `${otherGrp} (Fallback)` };
+                }
+            }
+            return { tiers: [], sourceGroup: null };
+        }
+
+        // Helper: Resolve Cost L/Mtr ($/lm) for a given (groupName, matName, stockLengthMm)
+        function resolveStockLengthPriceFromTiers(tiers, stockLengthMm) {
+            if (!tiers || tiers.length === 0) return { costLm: 0.00, matchedStockType: null };
+            const sorted = tiers.slice().sort((a, b) => a.stockType - b.stockType);
+            const sLen = Number(stockLengthMm);
+            for (let i = 0; i < sorted.length; i++) {
+                if (sLen <= sorted[i].stockType) {
+                    return { costLm: sorted[i].costLm, matchedStockType: sorted[i].stockType };
+                }
+            }
+            const last = sorted[sorted.length - 1];
+            return { costLm: last.costLm, matchedStockType: last.stockType };
+        }
+
+        // Populate the Timber Group dropdown and apply rates for the selected group
+        function populateCostingGroupSelector() {
+            const selectEl = document.getElementById('costing-group-select');
+            if (!selectEl) return;
+            const groupNames = Object.keys(pdfCostingGroups);
+            if (groupNames.length === 0) {
+                selectEl.innerHTML = `<option value="">-- No Costing PDF Loaded (Blank $0.00) --</option>`;
+                updateCostingStatusBadge();
+                return;
+            }
+
+            if (!pdfCostingGroups[selectedCostingGroup]) {
+                selectedCostingGroup = groupNames.includes('Truss') ? 'Truss' : groupNames[0];
+            }
+
+            selectEl.innerHTML = groupNames.map(gName => {
+                const secCount = Object.keys(pdfCostingGroups[gName] || {}).length;
+                const firstSec = Object.values(pdfCostingGroups[gName] || {})[0];
+                const grpId = (firstSec && firstSec[0] && firstSec[0].groupId) ? `Group ${firstSec[0].groupId}: ` : '';
+                return `<option value="${gName}" ${gName === selectedCostingGroup ? 'selected' : ''}>${grpId}${gName} (${secCount} sections)</option>`;
+            }).join('');
+
+            updateCostingStatusBadge();
+        }
+
+        function onCostingGroupChange(newGroup) {
+            if (!newGroup) return;
+            selectedCostingGroup = newGroup;
+            timberStockPrices = {};
+            applySelectedGroupPricesToMaterials();
+            saveCostingToStorage(false);
+            initCostingTable();
+            if (optimizationResult) {
+                calculateTimberCosts(true);
+                renderOptimizationResultsUI();
+            }
+            showToast(`Switched costing group to '${selectedCostingGroup}' and saved to browser storage.`);
+        }
+
+        // Recompute `timberStockPrices[matName][stockLen]` from `pdfCostingGroups[selectedCostingGroup]`
+        function applySelectedGroupPricesToMaterials() {
+            Object.keys(materialsConfig).forEach(matName => {
+                const { tiers } = findPdfTiersForMaterial(selectedCostingGroup, matName);
+                if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+                const stockList = materialsConfig[matName].stockLengths || [];
+                stockList.forEach(sObj => {
+                    const sLen = Number(sObj.length);
+                    if (tiers.length > 0) {
+                        const { costLm } = resolveStockLengthPriceFromTiers(tiers, sLen);
+                        timberStockPrices[matName][sLen] = costLm;
+                    } else if (timberStockPrices[matName][sLen] === undefined) {
+                        timberStockPrices[matName][sLen] = 0.00;
+                    }
+                });
+            });
+        }
+
+        function getMaterialStockPriceLm(matName, stockLenMm) {
+            const sLen = Number(stockLenMm);
+            if (timberStockPrices[matName] && timberStockPrices[matName][sLen] !== undefined) {
+                return Number(timberStockPrices[matName][sLen]);
+            }
+            const { tiers } = findPdfTiersForMaterial(selectedCostingGroup, matName);
+            const { costLm } = resolveStockLengthPriceFromTiers(tiers, sLen);
+            if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+            timberStockPrices[matName][sLen] = costLm;
+            return costLm;
+        }
+
+        function updateMaterialStockPrice(matName, stockLenMm, newVal) {
+            const p = parseFloat(newVal);
+            if (!isNaN(p) && p >= 0) {
+                if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+                timberStockPrices[matName][Number(stockLenMm)] = p;
+                saveCostingToStorage(false);
+                initCostingTable();
+                if (optimizationResult) {
+                    calculateTimberCosts(true);
+                    renderOptimizationResultsUI();
+                }
+            }
+        }
+
+        // Render the Tab 5 Stock-Length Cost Allocation Table
+        function initCostingTable() {
+            populateCostingGroupSelector();
+            const tbody = document.getElementById('costing-table-body');
+            if (!tbody) return;
+            tbody.innerHTML = '';
+
+            const matKeys = Object.keys(materialsConfig);
+            if (matKeys.length === 0) {
+                const hasPdfGroups = Object.keys(pdfCostingGroups).length > 0;
+                const msg = hasPdfGroups
+                    ? `Costing PDF ('${loadedCostingPdfName}') is saved and ready (${loadedCostingRowCount} tiers). Upload a .PSF job file on Tab 1 to allocate board costs.`
+                    : `Costing is currently blank ($0.00). Upload a Pryda Timber Report PDF above (or load a .PSF job file on Tab 1 to enter rates manually).`;
+                tbody.innerHTML = `<tr><td colspan="3" class="py-6 text-center text-slate-400 italic">${msg}</td></tr>`;
+                return;
+            }
+
+            matKeys.forEach(matName => {
+                const { tiers, sourceGroup } = findPdfTiersForMaterial(selectedCostingGroup, matName);
+                const stockList = (materialsConfig[matName].stockLengths || []).slice().sort((a, b) => a.length - b.length);
+
+                let pdfTiersHtml = '';
+                if (tiers.length > 0) {
+                    const badges = tiers.map(t => `<span class="inline-flex items-center px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-xs font-mono text-slate-300">&le;${t.stockType}mm: <strong class="text-indigo-400 ml-1">$${t.costLm.toFixed(2)}/lm</strong></span>`).join(' ');
+                    const srcBadge = (sourceGroup && sourceGroup !== selectedCostingGroup)
+                        ? `<span class="block text-[11px] text-amber-400 mt-1">Source: ${sourceGroup}</span>`
+                        : '';
+                    pdfTiersHtml = `<div class="flex flex-wrap gap-1.5">${badges}</div>${srcBadge}`;
+                } else {
+                    pdfTiersHtml = `<span class="text-xs text-slate-500 italic">No PDF tier loaded (Blank / Manual)</span>`;
+                }
+
+                let stockInputsHtml = stockList.map(sObj => {
+                    const sLen = Number(sObj.length);
+                    const rateLm = getMaterialStockPriceLm(matName, sLen);
+                    const boardCost = ((sLen / 1000.0) * rateLm).toFixed(2);
+                    const { matchedStockType } = resolveStockLengthPriceFromTiers(tiers, sLen);
+                    const tierHint = matchedStockType ? `Tier &le;${matchedStockType}mm` : 'Manual';
+                    const activeBorder = sObj.active ? 'border-slate-700 bg-slate-900' : 'border-slate-800/60 bg-slate-950/50 opacity-55';
+                    const activeTag = sObj.active ? '' : ' (Inactive)';
+
+                    return `
+                        <div class="inline-flex flex-col border ${activeBorder} rounded-xl p-2.5 min-w-[165px]">
+                            <div class="flex items-center justify-between text-xs mb-1.5">
+                                <span class="font-bold text-white">${sLen} mm${activeTag}</span>
+                                <span class="text-[10px] text-slate-400">${tierHint}</span>
+                            </div>
+                            <div class="flex items-center space-x-1 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1">
+                                <span class="text-slate-400 text-xs">$</span>
+                                <input type="number" step="0.01" min="0" value="${rateLm.toFixed(2)}" onchange="updateMaterialStockPrice('${matName}', ${sLen}, this.value)" class="w-16 bg-transparent text-white font-mono text-xs text-right focus:outline-none">
+                                <span class="text-slate-400 text-[11px]">/lm</span>
+                            </div>
+                            <div class="text-right text-[11px] text-emerald-400 font-mono font-semibold mt-1">
+                                = $${boardCost} / board
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-900/40 transition-colors align-top";
+                tr.innerHTML = `
+                    <td class="py-4 px-4 font-semibold text-white whitespace-nowrap">${matName}</td>
+                    <td class="py-4 px-4">${pdfTiersHtml}</td>
+                    <td class="py-4 px-4"><div class="flex flex-wrap gap-2.5">${stockInputsHtml}</div></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // PDF Costing Drop Zone Listeners
+        const costingDropZone = document.getElementById('costing-drop-zone');
+        const costingPdfInput = document.getElementById('costing-pdf-input');
+
+        if (costingDropZone && costingPdfInput) {
+            costingDropZone.addEventListener('dragover', (e) => { e.preventDefault(); costingDropZone.classList.add('border-indigo-500', 'bg-slate-900'); });
+            costingDropZone.addEventListener('dragleave', () => { costingDropZone.classList.remove('border-indigo-500', 'bg-slate-900'); });
+            costingDropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                costingDropZone.classList.remove('border-indigo-500', 'bg-slate-900');
+                if (e.dataTransfer.files.length > 0) parseCostingPdf(e.dataTransfer.files[0]);
+            });
+            costingPdfInput.addEventListener('change', (e) => {
+                if (e.target.files.length > 0) parseCostingPdf(e.target.files[0]);
+            });
+        }
+
+        // Parse uploaded Pryda Timber Report PDF using PDF.js coordinate-aware row extraction
+        async function parseCostingPdf(file) {
+            try {
+                if (typeof pdfjsLib === 'undefined') {
+                    showToast("PDF.js library is still loading. Please check your internet connection and try again.", 'error');
+                    return;
+                }
+                showToast(`Reading timber groups and Stock Type tiers from ${file.name}...`);
+                const arrayBuffer = await file.arrayBuffer();
+                const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+                const pdfDoc = await loadingTask.promise;
+
+                let allLines = [];
+
+                for (let pNum = 1; pNum <= pdfDoc.numPages; pNum++) {
+                    const page = await pdfDoc.getPage(pNum);
+                    const textContent = await page.getTextContent();
+
+                    let currentLine = [];
+                    let lastY = null;
+                    textContent.items.forEach(item => {
+                        const str = (item.str || '').trim();
+                        if (!str) return;
+                        const y = item.transform ? item.transform[5] : 0;
+                        if (lastY !== null && Math.abs(y - lastY) > 4) {
+                            if (currentLine.length > 0) allLines.push(currentLine.join(' '));
+                            currentLine = [str];
+                        } else {
+                            currentLine.push(str);
+                        }
+                        lastY = y;
+                    });
+                    if (currentLine.length > 0) allLines.push(currentLine.join(' '));
+                }
+
+                const descRegex = /Timber\s+Description:\s*(.+)/i;
+                const rowRegex = /^(?:(\d+)\s+)?([A-Za-z0-9]+)\s+([A-Za-z0-9_+-]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\$?(\d+\.\d+)\$?\s+\$?(\d+\.\d+)\$?$/;
+
+                let newGroups = {};
+                let groupNamesById = {};
+                let currentDesc = "Default Group";
+                let parsedRowCount = 0;
+
+                allLines.forEach(rawLine => {
+                    const line = rawLine.replace(/\s+/g, ' ').trim();
+                    const mDesc = line.match(descRegex);
+                    if (mDesc) {
+                        currentDesc = mDesc[1].trim();
+                        return;
+                    }
+                    const mRow = line.match(rowRegex);
+                    if (mRow) {
+                        const grpId = mRow[1] || '';
+                        const grade = mRow[2];
+                        const treatment = mRow[3];
+                        const depth = parseInt(mRow[4], 10);
+                        const thick = parseInt(mRow[5], 10);
+                        const stockType = parseInt(mRow[6], 10);
+                        const costLm = parseFloat(mRow[8]);
+                        const costCm = parseFloat(mRow[9]);
+
+                        if (grpId && currentDesc !== "Default Group") {
+                            if (!groupNamesById[grpId]) groupNamesById[grpId] = currentDesc;
+                        }
+                        const resolvedGroup = (grpId && groupNamesById[grpId]) ? groupNamesById[grpId] : currentDesc;
+                        const sectionGrade = `${depth}x${thick} ${grade}`;
+
+                        if (!newGroups[resolvedGroup]) newGroups[resolvedGroup] = {};
+                        if (!newGroups[resolvedGroup][sectionGrade]) newGroups[resolvedGroup][sectionGrade] = [];
+
+                        newGroups[resolvedGroup][sectionGrade].push({
+                            stockType: stockType,
+                            costLm: costLm,
+                            costCm: costCm,
+                            treatment: treatment,
+                            groupId: grpId
+                        });
+                        parsedRowCount++;
+                    }
+                });
+
+                if (parsedRowCount === 0) {
+                    showToast("Could not find standard Pryda Timber Report rows in this PDF. Please check the file format.", 'error');
+                    return;
+                }
+
+                Object.keys(newGroups).forEach(gKey => {
+                    Object.keys(newGroups[gKey]).forEach(secKey => {
+                        const bySt = {};
+                        newGroups[gKey][secKey].sort((a, b) => a.stockType - b.stockType).forEach(item => {
+                            bySt[item.stockType] = item;
+                        });
+                        newGroups[gKey][secKey] = Object.keys(bySt).map(Number).sort((a, b) => a - b).map(k => bySt[k]);
+                    });
+                });
+
+                pdfCostingGroups = newGroups;
+                const discoveredGroups = Object.keys(pdfCostingGroups);
+                if (!pdfCostingGroups[selectedCostingGroup]) {
+                    selectedCostingGroup = discoveredGroups.includes('Truss') ? 'Truss' : discoveredGroups[0];
+                }
+                loadedCostingPdfName = file.name;
+                loadedCostingRowCount = parsedRowCount;
+
+                timberStockPrices = {};
+                applySelectedGroupPricesToMaterials();
+                saveCostingToStorage(false);
+                initCostingTable();
+
+                if (optimizationResult) {
+                    calculateTimberCosts(true);
+                    renderOptimizationResultsUI();
+                }
+
+                showToast(`Saved ${parsedRowCount} price tiers across ${discoveredGroups.length} groups (${discoveredGroups.join(', ')}) to browser storage!`);
+            } catch (err) {
+                console.error(err);
+                showToast("Failed to parse costing PDF file: " + (err.message || err), 'error');
+            }
+        }
+
+        // Calculate and allocate stock-length-specific costs to all boards in optimizationResult
+        function calculateTimberCosts(silent = false) {
+            if (!optimizationResult || !optimizationResult.boards || optimizationResult.boards.length === 0) {
+                if (!silent) showToast("Please run the optimizer first before calculating timber costs.", 'error');
+                return;
+            }
+
+            let totalCost = 0;
+            let totalReusableCredit = 0;
+            let totalStockMeters = 0;
+            let totalBoardsCount = 0;
+            let costByMaterial = {};
+
+            optimizationResult.boards.forEach(b => {
+                const sCount = b.stackCount || 1;
+                const stockLenMm = Number(b.stockLength);
+                const stockLenM = stockLenMm / 1000.0;
+                const mat = b.material;
+                const unitPriceLm = getMaterialStockPriceLm(mat, stockLenMm);
+
+                const singleBoardCost = stockLenM * unitPriceLm;
+                const runBoardCost = singleBoardCost * sCount;
+                const reusableCredit = b.isReusable ? ((Number(b.remnant) / 1000.0) * unitPriceLm * sCount) : 0;
+
+                b._unitPriceLm = unitPriceLm;
+                b._singleBoardCost = singleBoardCost;
+                b._allocatedCost = runBoardCost;
+                b._reusableCostCredit = reusableCredit;
+
+                totalCost += runBoardCost;
+                totalReusableCredit += reusableCredit;
+                totalStockMeters += stockLenM * sCount;
+                totalBoardsCount += sCount;
+                costByMaterial[mat] = (costByMaterial[mat] || 0) + runBoardCost;
+            });
+
+            Object.keys(optimizationResult.summary).forEach(mat => {
+                optimizationResult.summary[mat].totalCost = (costByMaterial[mat] || 0).toFixed(2);
+            });
+
+            const netCost = Math.max(0, totalCost - totalReusableCredit);
+            const avgCostPerBoard = totalBoardsCount > 0 ? totalCost / totalBoardsCount : 0;
+            const avgCostPerLm = totalStockMeters > 0 ? totalCost / totalStockMeters : 0;
+
+            optimizationResult.totalTimberCost = totalCost;
+            optimizationResult.netTimberCost = netCost;
+            optimizationResult.totalReusableCredit = totalReusableCredit;
+            optimizationResult.avgCostPerBoard = avgCostPerBoard;
+            optimizationResult.avgCostPerLm = avgCostPerLm;
+            optimizationResult.costingGroup = selectedCostingGroup || "Blank";
+
+            const elTotal = document.getElementById('cost-stat-total');
+            const elNet = document.getElementById('cost-stat-net');
+            const elBoard = document.getElementById('cost-stat-board');
+            const elLm = document.getElementById('cost-stat-lm');
+            if (elTotal) elTotal.textContent = '$' + totalCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            if (elNet) elNet.textContent = '$' + netCost.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            if (elBoard) elBoard.textContent = '$' + avgCostPerBoard.toFixed(2);
+            if (elLm) elLm.textContent = '$' + avgCostPerLm.toFixed(2) + ' / lm';
+
+            if (!silent) {
+                const grpLabel = selectedCostingGroup || "Blank / Custom";
+                showToast(`Allocated '${grpLabel}' costs: $${totalCost.toFixed(2)} total ($${netCost.toFixed(2)} net after reusable stock)!`);
+            }
+        }
+
+        // Load any saved costing from browser localStorage on startup
+        loadCostingFromStorage();
+
         // Load saved profiles from localStorage on init
         function getSavedProfiles() {
             try {
@@ -759,9 +1426,14 @@
             localStorage.setItem('pba_optimizer_profiles', JSON.stringify(profiles));
         }
 
-        // Tab Switching
+        // Tab Switching (Includes 'costing' in tab list so switching tabs hides #tab-costing cleanly)
         function switchTab(tabId) {
-            ['upload', 'materials', 'optimizer', 'schedule', 'users'].forEach(t => {
+            if (tabId === 'costing') {
+                applySelectedGroupPricesToMaterials();
+                initCostingTable();
+                if (optimizationResult) calculateTimberCosts(true);
+            }
+            ['upload', 'materials', 'optimizer', 'schedule', 'costing', 'users'].forEach(t => {
                 const tabEl = document.getElementById(`tab-${t}`);
                 if (tabEl) tabEl.classList.add('hidden');
                 const navEl = document.getElementById(`nav-${t}`);
@@ -920,6 +1592,7 @@
                 }
             });
 
+            applySelectedGroupPricesToMaterials();
             renderMaterialsTable();
         }
 
@@ -1663,12 +2336,16 @@
         }
     function renderOptimizationResultsUI() {
             if (!optimizationResult) return;
+            calculateTimberCosts(true);
 
             const runsSubtext = (optimizationResult.totalStackedRuns && optimizationResult.totalStackedRuns > 0)
                 ? ` (${optimizationResult.totalSawRuns} runs, ${optimizationResult.totalStackedRuns}x 2-High)`
                 : ` (${optimizationResult.totalMembers} pcs)`;
 
+            const totalCostFormatted = '$' + (optimizationResult.totalTimberCost || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
             const metricsContainer = document.getElementById('opt-summary-metrics');
+            metricsContainer.className = "grid grid-cols-2 md:grid-cols-5 gap-4";
             metricsContainer.innerHTML = `
                 <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
                     <span class="text-xs text-slate-400 block">Total Boards${runsSubtext}</span>
@@ -1685,6 +2362,10 @@
                 <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
                     <span class="text-xs text-slate-400 block">True Waste %</span>
                     <span class="text-xl font-bold text-red-500">${optimizationResult.overallWastePct}%</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                    <span class="text-xs text-slate-400 block">Timber Cost (${selectedCostingGroup || "Blank"})</span>
+                    <span class="text-xl font-bold text-emerald-400">${totalCostFormatted}</span>
                 </div>
             `;
             document.getElementById('optimization-results-summary').classList.remove('hidden');
@@ -1704,6 +2385,7 @@
                     <td class="py-3 px-4 text-right font-mono">${s.wasteM}</td>
                     <td class="py-3 px-4 text-right font-mono text-emerald-400">${s.reusableM}</td>
                     <td class="py-3 px-4 text-right font-semibold text-red-500">${s.wastePct}%</td>
+                    <td class="py-3 px-4 text-right font-mono font-bold text-emerald-400">$${s.totalCost || '0.00'}</td>
                 `;
                 summaryBody.appendChild(tr);
             });
@@ -1740,6 +2422,7 @@
                     : `<span class="text-slate-400">${remPrefix}${b.remnant} mm (Waste)</span>`;
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-slate-900/50 transition-colors";
+                const bCostStr = `$${(b._allocatedCost || 0).toFixed(2)} <span class="text-[10px] text-slate-500">($${(b._unitPriceLm || 0).toFixed(2)}/lm)</span>`;
                 tr.innerHTML = `
                     <td class="py-3 px-4 font-semibold text-slate-300">${b.material}</td>
                     <td class="py-3 px-4 text-center text-red-500 font-bold">Board ${bTitle}</td>
@@ -1747,6 +2430,7 @@
                     <td class="py-3 px-4 text-slate-200">${cutsStr}</td>
                     <td class="py-3 px-4 text-red-300/90 font-medium">${labelsStr}</td>
                     <td class="py-3 px-4 text-right">${remnantBadge}</td>
+                    <td class="py-3 px-4 text-right font-mono text-emerald-400 font-semibold">${bCostStr}</td>
                 `;
                 detailBody.appendChild(tr);
             });
@@ -1870,15 +2554,21 @@
             try {
                 const wb = XLSX.utils.book_new();
 
+                // Calculate costs if not already done
+                if (optimizationResult.totalTimberCost === undefined) {
+                    calculateTimberCosts();
+                }
+
                 let summaryRows = [
-                    ["PBA OPTIMIZER - TIMBER TRUSS CUTTING SCHEDULE & REUSABLE STOCK REPORT"],
+                    ["PBA OPTIMIZER - TIMBER TRUSS CUTTING SCHEDULE & TIMBER COSTING REPORT"],
                     ["Generated by PBA Optimizer"],
                     [],
-                    ["Material / Grade", "Total Members", "Total Boards", "Total Stock Length (m)", "Total Cut Length (m)", "Waste (m)", "Reusable Stock (m)", "Waste Percentage (%)"]
+                    ["Material / Grade", "Total Members", "Total Boards", "Total Stock Length (m)", "Total Cut Length (m)", "Waste (m)", "Reusable Stock (m)", "Waste Percentage (%)", "Total Cost ($)"]
                 ];
 
                 Object.keys(optimizationResult.summary).forEach(mat => {
                     const s = optimizationResult.summary[mat];
+                    const matCost = optimizationResult.boards.filter(b => b.material === mat).reduce((acc, b) => acc + (b._allocatedCost || 0), 0);
                     summaryRows.push([
                         mat,
                         Number(s.totalMembers),
@@ -1887,17 +2577,18 @@
                         Number(s.totalCutM),
                         Number(s.wasteM),
                         Number(s.reusableM),
-                        Number(s.wastePct) / 100
+                        Number(s.wastePct) / 100,
+                        Number(matCost.toFixed(2))
                     ]);
                 });
 
                 const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-                XLSX.utils.book_append_sheet(wb, wsSummary, "Summary & Waste");
+                XLSX.utils.book_append_sheet(wb, wsSummary, "Summary & Costing");
 
                 let detailRows = [
-                    ["DETAILED BOARD-BY-BOARD CUTTING SEQUENCE & MEMBER LABELS"],
+                    ["DETAILED BOARD-BY-BOARD CUTTING SEQUENCE & TIMBER COST ALLOCATION"],
                     [],
-                    ["Material", "Board # / Stack", "Boards in Run", "Stock Length (mm)", "Cut Sequence (Lengths mm)", "Member & Truss Labels", "Remnant per Board (mm)", "Classification"]
+                    ["Material", "Board # / Stack", "Boards in Run", "Stock Length (mm)", "Cost L/Mtr ($/lm)", "Cut Sequence (Lengths mm)", "Member & Truss Labels", "Remnant per Board (mm)", "Classification", "Board Cost ($)"]
                 ];
 
                 optimizationResult.boards.forEach(b => {
@@ -1909,10 +2600,12 @@
                         b.boardLabel || b.boardIndex,
                         sCount,
                         b.stockLength,
+                        Number((b._unitPriceLm || 0).toFixed(2)),
                         cutsStr,
                         labelsStr,
                         b.remnant,
-                        b.isReusable ? "Reusable Stock" : "Waste"
+                        b.isReusable ? "Reusable Stock" : "Waste",
+                        Number((b._allocatedCost || 0).toFixed(2))
                     ]);
                 });
 
@@ -1927,12 +2620,13 @@
             }
         }
     
-        // Print Consolidated Stock Draw
+        // Print Consolidated Stock Draw (with Per-Stock-Length Cost L/Mtr & Total Cost)
         function printConsolidatedStockDraw() {
             if (!optimizationResult) {
                 showToast("Please run the optimizer first before printing stock draw.", 'error');
                 return;
             }
+            calculateTimberCosts(true);
 
             let printWindow = window.open('', '_blank');
             let htmlContent = `
@@ -1940,13 +2634,13 @@
                 <html lang="en">
                 <head>
                     <meta charset="UTF-8">
-                    <title>Consolidated Stock Draw Report - PBA Optimizer</title>
+                    <title>Consolidated Stock Draw & Costing Report - PBA Optimizer</title>
                     <style>
                         body { font-family: Arial, sans-serif; padding: 20px; color: #111; }
                         h1 { font-size: 20px; margin-bottom: 5px; }
                         p { font-size: 12px; color: #555; margin-bottom: 20px; }
                         table { width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 12px; }
-                        th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+                        th, td { border: 1px solid #ccc; padding: 8px 10px; text-align: left; }
                         th { background-color: #f4f4f4; }
                         .text-right { text-align: right; }
                         .text-center { text-align: center; }
@@ -1956,8 +2650,8 @@
                     </style>
                 </head>
                 <body>
-                    <h1>PBA OPTIMIZER - CONSOLIDATED STOCK DRAW REPORT</h1>
-                    <p>Project File: ${currentFileName} | Generated: ${new Date().toLocaleString()}</p>
+                    <h1>PBA OPTIMIZER - CONSOLIDATED STOCK DRAW & COSTING REPORT</h1>
+                    <p>Project File: ${currentFileName} | Costing Group: <strong>${selectedCostingGroup || "Blank"}</strong> | Generated: ${new Date().toLocaleString()}</p>
                     
                     <table>
                         <thead>
@@ -1966,25 +2660,32 @@
                                 <th class="text-center">Total Boards</th>
                                 <th class="text-center">Members Cut</th>
                                 <th class="text-right">Stock Length (mm)</th>
-                                <th class="text-right">Total Stock Length (m)</th>
-                                <th class="text-right">Total Cut Length (m)</th>
+                                <th class="text-right">Cost L/Mtr ($/lm)</th>
+                                <th class="text-right">Total Stock (m)</th>
+                                <th class="text-right">Total Cut (m)</th>
                                 <th class="text-right">Reusable Stock (m)</th>
                                 <th class="text-right">Waste (m)</th>
+                                <th class="text-right">Total Cost ($)</th>
                             </tr>
                         </thead>
                         <tbody>
             `;
 
-            let grandBoards = 0, grandMembers = 0, grandStockM = 0, grandCutM = 0, grandReusableM = 0, grandWasteM = 0;
+            let grandBoards = 0, grandMembers = 0, grandStockM = 0, grandCutM = 0, grandReusableM = 0, grandWasteM = 0, grandCost = 0;
 
             Object.keys(optimizationResult.summary).forEach(mat => {
                 const s = optimizationResult.summary[mat];
                 let stockBreakdown = {};
+                let matCostTotal = 0;
+
                 optimizationResult.boards.filter(b => b.material === mat).forEach(b => {
                     const sLen = b.stockLength;
                     const sCount = b.stackCount || 1;
+                    const rateLm = b._unitPriceLm || getMaterialStockPriceLm(mat, sLen);
+                    const runCost = b._allocatedCost || ((Number(sLen) / 1000.0) * rateLm * sCount);
+
                     if (!stockBreakdown[sLen]) {
-                        stockBreakdown[sLen] = { boards: 0, members: 0, stockLenMm: 0, cutLenMm: 0, reusableMm: 0, wasteMm: 0 };
+                        stockBreakdown[sLen] = { boards: 0, members: 0, stockLenMm: 0, cutLenMm: 0, reusableMm: 0, wasteMm: 0, rateLm: rateLm, cost: 0 };
                     }
                     const singleCutMm = b.cuts.reduce((acc, c) => acc + c.lengthNormalized, 0);
                     const totalMembersInRun = b.cuts.reduce((acc, c) => acc + (c._stackQty || sCount), 0);
@@ -1992,6 +2693,8 @@
                     stockBreakdown[sLen].members += totalMembersInRun;
                     stockBreakdown[sLen].stockLenMm += Number(sLen) * sCount;
                     stockBreakdown[sLen].cutLenMm += singleCutMm * sCount;
+                    stockBreakdown[sLen].cost += runCost;
+                    matCostTotal += runCost;
                     if (b.isReusable) {
                         stockBreakdown[sLen].reusableMm += b.remnant * sCount;
                     } else {
@@ -2011,10 +2714,12 @@
                             <td class="text-center">${grp.boards}</td>
                             <td class="text-center">${grp.members}</td>
                             <td class="text-right">${stockLen} mm</td>
+                            <td class="text-right">$${grp.rateLm.toFixed(2)} /lm</td>
                             <td class="text-right">${stockM} m</td>
                             <td class="text-right">${cutM} m</td>
                             <td class="text-right">${reM} m</td>
                             <td class="text-right">${wM} m</td>
+                            <td class="text-right"><strong>$${grp.cost.toFixed(2)}</strong></td>
                         </tr>
                     `;
                 });
@@ -2025,10 +2730,12 @@
                         <td class="text-center">${s.totalBoards}</td>
                         <td class="text-center">${s.totalMembers}</td>
                         <td class="text-right">All Lengths</td>
+                        <td class="text-right">-</td>
                         <td class="text-right">${s.totalStockM} m</td>
                         <td class="text-right">${s.totalCutM} m</td>
                         <td class="text-right">${s.reusableM} m</td>
                         <td class="text-right">${s.wasteM} m</td>
+                        <td class="text-right">$${matCostTotal.toFixed(2)}</td>
                     </tr>
                 `;
 
@@ -2038,18 +2745,21 @@
                 grandCutM += Number(s.totalCutM);
                 grandReusableM += Number(s.reusableM);
                 grandWasteM += Number(s.wasteM);
+                grandCost += matCostTotal;
             });
 
             htmlContent += `
                 <tr style="background-color: #e2e8f0; font-weight: bold; border-top: 2px solid #334155;">
-                    <td>GRAND TOTAL</td>
+                    <td>GRAND TOTAL (${selectedCostingGroup || "Blank"})</td>
                     <td class="text-center">${grandBoards}</td>
                     <td class="text-center">${grandMembers}</td>
+                    <td class="text-right">-</td>
                     <td class="text-right">-</td>
                     <td class="text-right">${grandStockM.toFixed(2)} m</td>
                     <td class="text-right">${grandCutM.toFixed(2)} m</td>
                     <td class="text-right">${grandReusableM.toFixed(2)} m</td>
                     <td class="text-right">${grandWasteM.toFixed(2)} m</td>
+                    <td class="text-right">$${grandCost.toFixed(2)}</td>
                 </tr>
             `;
 
@@ -2107,7 +2817,6 @@
             printWindow.focus();
         }
 
-    
         // Reprocess & Reset Stock from File
         function resetStockToDefaults() {
             const isAdmin = currentUser && currentUser.role === 'Admin';
