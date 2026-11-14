@@ -271,7 +271,9 @@
                             <div>
                                 <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Optimization Strategy</label>
                                 <select id="opt-strategy" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
-                                    <option value="stack_2" selected>2-Board Stack Cutting (Stack 2 High)</option>
+                                    <option value="economical_stack_2" selected>Economical Cost + 2-Board Stack (Lowest $ Cost)</option>
+                                    <option value="stack_2">2-Board Stack Cutting (Stack 2 High - Min Waste)</option>
+                                    <option value="economical_single">Economical Cost Single-Board (Lowest $ Cost)</option>
                                     <option value="like_member">Like-Member Continuity (BFD + Consecutive)</option>
                                     <option value="bfd">Best Fit Decreasing (BFD)</option>
                                     <option value="ffd">First Fit Decreasing (FFD)</option>
@@ -981,8 +983,13 @@
             initCostingTable();
 
             if (optimizationResult) {
-                calculateTimberCosts(true);
-                renderOptimizationResultsUI();
+                const curStrat = document.getElementById('opt-strategy') ? document.getElementById('opt-strategy').value : '';
+                if (curStrat === 'economical_stack_2' || curStrat === 'economical_single') {
+                    runOptimization();
+                } else {
+                    calculateTimberCosts(true);
+                    renderOptimizationResultsUI();
+                }
             } else {
                 const elTotal = document.getElementById('cost-stat-total');
                 const elNet = document.getElementById('cost-stat-net');
@@ -997,39 +1004,53 @@
             showToast("All timber costing data reset to blank ($0.00) and cleared from browser storage.");
         }
 
-        // Helper: Normalize section + grade string (e.g. "90x35 MGP10H2" -> tries "90x35 MGP10H2", then "90x35 MGP10")
+        // Helper: Strictly match .PSF material (e.g. "90x35 MGP10", "90x35 MGP10H2", "90x35 MGP10H2F", "90x35 MGP10H3")
+        // Never conflates untreated and treated timber, so jobs with mixed treatments get the exact cost for each treatment type.
         function findPdfTiersForMaterial(groupName, matName) {
-            if (!groupName || !pdfCostingGroups[groupName]) return { tiers: [], sourceGroup: null };
-            const grpData = pdfCostingGroups[groupName] || {};
             const cleanMat = String(matName || '').trim().replace(/\s+/g, ' ');
-            if (grpData[cleanMat] && grpData[cleanMat].length > 0) {
-                return { tiers: grpData[cleanMat], sourceGroup: groupName };
-            }
+            if (!cleanMat) return { tiers: [], sourceGroup: null };
             const lowerMat = cleanMat.toLowerCase();
-            for (const k of Object.keys(grpData)) {
-                if (k.toLowerCase() === lowerMat && grpData[k].length > 0) {
-                    return { tiers: grpData[k], sourceGroup: groupName };
+
+            // Helper to check a single group dictionary for an exact (case-insensitive) match on Size + Grade(+Treatment)
+            function matchInGroup(gName) {
+                const grpData = pdfCostingGroups[gName] || {};
+                if (grpData[cleanMat] && grpData[cleanMat].length > 0) {
+                    return { tiers: grpData[cleanMat], sourceGroup: gName };
                 }
-            }
-            const strippedMat = cleanMat.replace(/(H2|H3|T)$/i, '').trim();
-            if (grpData[strippedMat] && grpData[strippedMat].length > 0) {
-                return { tiers: grpData[strippedMat], sourceGroup: groupName };
-            }
-            for (const k of Object.keys(grpData)) {
-                if (k.toLowerCase() === strippedMat.toLowerCase() && grpData[k].length > 0) {
-                    return { tiers: grpData[k], sourceGroup: groupName };
+                for (const k of Object.keys(grpData)) {
+                    if (k.toLowerCase() === lowerMat && grpData[k].length > 0) {
+                        return { tiers: grpData[k], sourceGroup: gName };
+                    }
                 }
+                // Check reversed dimension order (e.g. PDF has "35x90 MGP10H2F" and .PSF has "90x35 MGP10H2F") with the EXACT same Grade+Treatment
+                const dimMatch = cleanMat.match(/^(\d+)\s*x\s*(\d+)\s+(.+)$/i);
+                if (dimMatch) {
+                    const swappedKey = `${dimMatch[2]}x${dimMatch[1]} ${dimMatch[3]}`.toLowerCase();
+                    for (const k of Object.keys(grpData)) {
+                        if (k.toLowerCase() === swappedKey && grpData[k].length > 0) {
+                            return { tiers: grpData[k], sourceGroup: gName };
+                        }
+                    }
+                }
+                return null;
             }
-            for (const otherGrp of Object.keys(pdfCostingGroups)) {
+
+            // 1. Check the currently selected costing group first
+            if (groupName && pdfCostingGroups[groupName]) {
+                const primaryMatch = matchInGroup(groupName);
+                if (primaryMatch) return primaryMatch;
+            }
+
+            // 2. If the job has mixed treatments across groups (e.g. Untreated in "Truss" and H2F/H3 in "TIMBER H2"),
+            // search other loaded groups for the EXACT same Size + Grade + Treatment key (never cross-matching different treatments)
+            for (const otherGrp of Object.keys(pdfCostingGroups || {})) {
                 if (otherGrp === groupName) continue;
-                const oData = pdfCostingGroups[otherGrp] || {};
-                if (oData[cleanMat] && oData[cleanMat].length > 0) {
-                    return { tiers: oData[cleanMat], sourceGroup: `${otherGrp} (Fallback)` };
-                }
-                if (oData[strippedMat] && oData[strippedMat].length > 0) {
-                    return { tiers: oData[strippedMat], sourceGroup: `${otherGrp} (Fallback)` };
+                const otherMatch = matchInGroup(otherGrp);
+                if (otherMatch) {
+                    return { tiers: otherMatch.tiers, sourceGroup: `${otherGrp} (Auto-Matched Group)` };
                 }
             }
+
             return { tiers: [], sourceGroup: null };
         }
 
@@ -1066,7 +1087,7 @@
                 const secCount = Object.keys(pdfCostingGroups[gName] || {}).length;
                 const firstSec = Object.values(pdfCostingGroups[gName] || {})[0];
                 const grpId = (firstSec && firstSec[0] && firstSec[0].groupId) ? `Group ${firstSec[0].groupId}: ` : '';
-                return `<option value="${gName}" ${gName === selectedCostingGroup ? 'selected' : ''}>${grpId}${gName} (${secCount} sections)</option>`;
+                return `<option value="${gName}" ${gName === selectedCostingGroup ? 'selected' : ''}>${grpId}${gName} (${secCount} grade/treatment sections)</option>`;
             }).join('');
 
             updateCostingStatusBadge();
@@ -1080,14 +1101,23 @@
             saveCostingToStorage(false);
             initCostingTable();
             if (optimizationResult) {
-                calculateTimberCosts(true);
-                renderOptimizationResultsUI();
+                const curStrat = document.getElementById('opt-strategy') ? document.getElementById('opt-strategy').value : '';
+                if (curStrat === 'economical_stack_2' || curStrat === 'economical_single') {
+                    runOptimization();
+                } else {
+                    calculateTimberCosts(true);
+                    renderOptimizationResultsUI();
+                }
             }
             showToast(`Switched costing group to '${selectedCostingGroup}' and saved to browser storage.`);
         }
 
         // Recompute `timberStockPrices[matName][stockLen]` from `pdfCostingGroups[selectedCostingGroup]`
         function applySelectedGroupPricesToMaterials() {
+            const groupNames = Object.keys(pdfCostingGroups || {});
+            if (!selectedCostingGroup && groupNames.length > 0) {
+                selectedCostingGroup = groupNames.includes('Truss') ? 'Truss' : groupNames[0];
+            }
             Object.keys(materialsConfig).forEach(matName => {
                 const { tiers } = findPdfTiersForMaterial(selectedCostingGroup, matName);
                 if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
@@ -1106,7 +1136,7 @@
 
         function getMaterialStockPriceLm(matName, stockLenMm) {
             const sLen = Number(stockLenMm);
-            if (timberStockPrices[matName] && timberStockPrices[matName][sLen] !== undefined) {
+            if (timberStockPrices[matName] && timberStockPrices[matName][sLen] !== undefined && Number(timberStockPrices[matName][sLen]) > 0) {
                 return Number(timberStockPrices[matName][sLen]);
             }
             const { tiers } = findPdfTiersForMaterial(selectedCostingGroup, matName);
@@ -1139,11 +1169,36 @@
 
             const matKeys = Object.keys(materialsConfig);
             if (matKeys.length === 0) {
-                const hasPdfGroups = Object.keys(pdfCostingGroups).length > 0;
-                const msg = hasPdfGroups
-                    ? `Costing PDF ('${loadedCostingPdfName}') is saved and ready (${loadedCostingRowCount} tiers). Upload a .PSF job file on Tab 1 to allocate board costs.`
-                    : `Costing is currently blank ($0.00). Upload a Pryda Timber Report PDF above (or load a .PSF job file on Tab 1 to enter rates manually).`;
-                tbody.innerHTML = `<tr><td colspan="3" class="py-6 text-center text-slate-400 italic">${msg}</td></tr>`;
+                // If no .PSF file is loaded yet, but a Costing PDF IS loaded, show a preview of all parsed Grade+Treatment sections in the selected group!
+                const grpData = pdfCostingGroups[selectedCostingGroup] || {};
+                const pdfSecKeys = Object.keys(grpData);
+                if (pdfSecKeys.length > 0) {
+                    pdfSecKeys.forEach(secName => {
+                        const tiers = grpData[secName] || [];
+                        const firstTier = tiers[0] || {};
+                        const treatDesc = firstTier.treatment || 'Untreated';
+                        const isUntreated = !firstTier.firstTreat || firstTier.firstTreat.toLowerCase() === 'untreated';
+                        const treatBadge = isUntreated
+                            ? `<span class="inline-block mt-1 px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">Treatment: Untreated (Grade unchanged)</span>`
+                            : `<span class="inline-block mt-1 px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 text-[11px]">Treatment: "${treatDesc}" &rarr; +<strong>${firstTier.firstTreat}</strong></span>`;
+                        const badges = tiers.map(t => `<span class="inline-flex items-center px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-xs font-mono text-slate-300">&le;${t.stockType}mm: <strong class="text-indigo-400 ml-1">$${t.costLm.toFixed(2)}/lm</strong></span>`).join(' ');
+
+                        const tr = document.createElement('tr');
+                        tr.className = "hover:bg-slate-900/40 transition-colors align-top";
+                        tr.innerHTML = `
+                            <td class="py-3.5 px-4 font-semibold text-white whitespace-nowrap">
+                                <div>${secName}</div>
+                                ${treatBadge}
+                            </td>
+                            <td class="py-3.5 px-4"><div class="flex flex-wrap gap-1.5">${badges}</div></td>
+                            <td class="py-3.5 px-4 text-xs text-slate-400 italic">Upload a .PSF job file on Tab 1 to allocate active stock lengths</td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                    return;
+                }
+
+                tbody.innerHTML = `<tr><td colspan="3" class="py-6 text-center text-slate-400 italic">Costing is currently blank ($0.00). Upload a Pryda Timber Report PDF above (or load a .PSF job file on Tab 1 to enter rates manually).</td></tr>`;
                 return;
             }
 
@@ -1152,14 +1207,22 @@
                 const stockList = (materialsConfig[matName].stockLengths || []).slice().sort((a, b) => a.length - b.length);
 
                 let pdfTiersHtml = '';
+                let treatBadgeHtml = '';
                 if (tiers.length > 0) {
+                    const firstTier = tiers[0] || {};
+                    const treatDesc = firstTier.treatment || 'Untreated';
+                    const isUntreated = !firstTier.firstTreat || firstTier.firstTreat.toLowerCase() === 'untreated';
+                    treatBadgeHtml = isUntreated
+                        ? `<span class="inline-block mt-1 px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">PDF Treatment: Untreated</span>`
+                        : `<span class="inline-block mt-1 px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 text-[11px]">PDF Treatment: "${treatDesc}" (+${firstTier.firstTreat})</span>`;
+
                     const badges = tiers.map(t => `<span class="inline-flex items-center px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-xs font-mono text-slate-300">&le;${t.stockType}mm: <strong class="text-indigo-400 ml-1">$${t.costLm.toFixed(2)}/lm</strong></span>`).join(' ');
                     const srcBadge = (sourceGroup && sourceGroup !== selectedCostingGroup)
-                        ? `<span class="block text-[11px] text-amber-400 mt-1">Source: ${sourceGroup}</span>`
+                        ? `<span class="block text-[11px] text-amber-400 mt-1">Matched from: ${sourceGroup}</span>`
                         : '';
                     pdfTiersHtml = `<div class="flex flex-wrap gap-1.5">${badges}</div>${srcBadge}`;
                 } else {
-                    pdfTiersHtml = `<span class="text-xs text-slate-500 italic">No PDF tier loaded (Blank / Manual)</span>`;
+                    pdfTiersHtml = `<span class="text-xs text-amber-400 italic">No matching grade/treatment in loaded PDF (Manual rate)</span>`;
                 }
 
                 let stockInputsHtml = stockList.map(sObj => {
@@ -1192,7 +1255,10 @@
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-slate-900/40 transition-colors align-top";
                 tr.innerHTML = `
-                    <td class="py-4 px-4 font-semibold text-white whitespace-nowrap">${matName}</td>
+                    <td class="py-4 px-4 font-semibold text-white whitespace-nowrap">
+                        <div>${matName}</div>
+                        ${treatBadgeHtml}
+                    </td>
                     <td class="py-4 px-4">${pdfTiersHtml}</td>
                     <td class="py-4 px-4"><div class="flex flex-wrap gap-2.5">${stockInputsHtml}</div></td>
                 `;
@@ -1217,50 +1283,85 @@
             });
         }
 
-        // Parse uploaded Pryda Timber Report PDF using PDF.js coordinate-aware row extraction
+        // Parse uploaded Pryda Timber Report PDF:
+        // Rule:
+        // - If Treatment is "Untreated" (case-insensitive), grade remains <Grade> (e.g. "90x35 MGP10").
+        // - If Treatment has any treatment text (e.g. "H2 treated", "H2F ENVELOPE", "H3 LOSP"),
+        //   the first word of Treatment ("H2", "H2F", "H3") is appended to <Grade> (e.g. "90x35 MGP10H2", "90x35 MGP10H2F", "90x35 MGP10H3").
+        // - Each treatment type is stored under its own distinct key so jobs with both treated and untreated timber are costed accurately.
         async function parseCostingPdf(file) {
             try {
                 if (typeof pdfjsLib === 'undefined') {
                     showToast("PDF.js library is still loading. Please check your internet connection and try again.", 'error');
                     return;
                 }
-                showToast(`Reading timber groups and Stock Type tiers from ${file.name}...`);
+                showToast(`Reading timber groups, treatments, and Stock Type tiers from ${file.name}...`);
                 const arrayBuffer = await file.arrayBuffer();
                 const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
                 const pdfDoc = await loadingTask.promise;
 
-                let allLines = [];
-
+                let rawTokens = [];
                 for (let pNum = 1; pNum <= pdfDoc.numPages; pNum++) {
                     const page = await pdfDoc.getPage(pNum);
                     const textContent = await page.getTextContent();
-
-                    let currentLine = [];
-                    let lastY = null;
                     textContent.items.forEach(item => {
                         const str = (item.str || '').trim();
-                        if (!str) return;
-                        const y = item.transform ? item.transform[5] : 0;
-                        if (lastY !== null && Math.abs(y - lastY) > 4) {
-                            if (currentLine.length > 0) allLines.push(currentLine.join(' '));
-                            currentLine = [str];
-                        } else {
-                            currentLine.push(str);
-                        }
-                        lastY = y;
+                        if (str) rawTokens.push(str);
                     });
-                    if (currentLine.length > 0) allLines.push(currentLine.join(' '));
                 }
 
-                const descRegex = /Timber\s+Description:\s*(.+)/i;
-                const rowRegex = /^(?:(\d+)\s+)?([A-Za-z0-9]+)\s+([A-Za-z0-9_+-]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\$?(\d+\.\d+)\$?\s+\$?(\d+\.\d+)\$?$/;
+                // Filter out page headers, footers, and column title tokens
+                const skipExact = new Set([
+                    "timber", "group", "grade", "treatment", "actual", "depth", "thick",
+                    "stock type", "stock", "type", "cost", "cost l/mtr", "cost c/mtr",
+                    "l/mtr", "c/mtr", "thickstock type cost", "group cost l/mtrcost c/mtr",
+                    "group grade treatment actual", "- timber report -"
+                ]);
 
-                let newGroups = {};
+                let cleanedTokens = [];
+                rawTokens.forEach(tok => {
+                    const low = tok.toLowerCase().trim();
+                    if (!low || skipExact.has(low)) return;
+                    if (low.startsWith("pryda australia") || low.startsWith("date:") || low.startsWith("page:") || low.startsWith("- timber report")) return;
+                    cleanedTokens.push(tok.trim());
+                });
+
+                // Group stream tokens into complete logical records:
+                // - "Timber Description: ..." is a group header record
+                // - Data rows end with two currency numbers ($Cost_L_Mtr and $Cost_C_Mtr), merging multi-word/wrapped treatments like "H2 treated", "H2F ENVELOPE", "H3 LOSP"
+                let logicalRecords = [];
+                let buf = [];
+                const pricePairEndRegex = /(?:\$\s*\d+\.\d+|\d+\.\d+\s*\$)\s+(?:\$\s*\d+\.\d+|\d+\.\d+\s*\$)$/;
+
+                cleanedTokens.forEach(tok => {
+                    if (/^Timber\s+Description:/i.test(tok)) {
+                        if (buf.length > 0) {
+                            logicalRecords.push(buf.join(' '));
+                            buf = [];
+                        }
+                        logicalRecords.push(tok);
+                    } else {
+                        buf.push(tok);
+                        const candidate = buf.join(' ');
+                        if (pricePairEndRegex.test(candidate)) {
+                            logicalRecords.push(candidate);
+                            buf = [];
+                        }
+                    }
+                });
+                if (buf.length > 0) logicalRecords.push(buf.join(' '));
+
+                const descRegex = /Timber\s+Description:\s*(.+)/i;
+                const rowRegex = /^(?:(\d+)\s+)?([A-Za-z0-9_+-]+)\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\$?(\d+\.\d+)\$?\s+\$?(\d+\.\d+)\$?$/;
+
+                // Merge with existing groups so users can load both Untreated and Treated PDFs if they are in separate files
+                let mergedGroups = JSON.parse(JSON.stringify(pdfCostingGroups || {}));
+                let touchedGroupsInThisPdf = new Set();
                 let groupNamesById = {};
                 let currentDesc = "Default Group";
                 let parsedRowCount = 0;
 
-                allLines.forEach(rawLine => {
+                logicalRecords.forEach(rawLine => {
                     const line = rawLine.replace(/\s+/g, ' ').trim();
                     const mDesc = line.match(descRegex);
                     if (mDesc) {
@@ -1270,8 +1371,14 @@
                     const mRow = line.match(rowRegex);
                     if (mRow) {
                         const grpId = mRow[1] || '';
-                        const grade = mRow[2];
-                        const treatment = mRow[3];
+                        const grade = mRow[2].trim();
+                        const treatmentFull = mRow[3].trim();
+                        // Extract the first word of the Treatment column:
+                        // - "Untreated" -> firstTreatWord = "Untreated" -> grade remains MGP10
+                        // - "H2 treated" -> firstTreatWord = "H2" -> grade becomes MGP10H2
+                        // - "H2F ENVELOPE" -> firstTreatWord = "H2F" -> grade becomes MGP10H2F
+                        // - "H3 LOSP" -> firstTreatWord = "H3" -> grade becomes MGP10H3
+                        const firstTreatWord = treatmentFull.split(/\s+/)[0] || '';
                         const depth = parseInt(mRow[4], 10);
                         const thick = parseInt(mRow[5], 10);
                         const stockType = parseInt(mRow[6], 10);
@@ -1282,18 +1389,30 @@
                             if (!groupNamesById[grpId]) groupNamesById[grpId] = currentDesc;
                         }
                         const resolvedGroup = (grpId && groupNamesById[grpId]) ? groupNamesById[grpId] : currentDesc;
-                        const sectionGrade = `${depth}x${thick} ${grade}`;
 
-                        if (!newGroups[resolvedGroup]) newGroups[resolvedGroup] = {};
-                        if (!newGroups[resolvedGroup][sectionGrade]) newGroups[resolvedGroup][sectionGrade] = [];
+                        // Reset group if it's the first time we see this group in the newly uploaded PDF
+                        if (!touchedGroupsInThisPdf.has(resolvedGroup)) {
+                            touchedGroupsInThisPdf.add(resolvedGroup);
+                            mergedGroups[resolvedGroup] = {};
+                        }
 
-                        newGroups[resolvedGroup][sectionGrade].push({
+                        const isUntreated = !firstTreatWord || firstTreatWord.toLowerCase() === 'untreated' || firstTreatWord.toLowerCase() === 'none' || firstTreatWord.toLowerCase() === 'nil';
+                        const finalGrade = isUntreated ? grade : `${grade}${firstTreatWord}`;
+                        const sectionGradeKey = `${depth}x${thick} ${finalGrade}`;
+
+                        if (!mergedGroups[resolvedGroup][sectionGradeKey]) {
+                            mergedGroups[resolvedGroup][sectionGradeKey] = [];
+                        }
+
+                        mergedGroups[resolvedGroup][sectionGradeKey].push({
                             stockType: stockType,
                             costLm: costLm,
                             costCm: costCm,
-                            treatment: treatment,
+                            treatment: treatmentFull,
+                            firstTreat: isUntreated ? 'Untreated' : firstTreatWord,
                             groupId: grpId
                         });
+
                         parsedRowCount++;
                     }
                 });
@@ -1303,23 +1422,27 @@
                     return;
                 }
 
-                Object.keys(newGroups).forEach(gKey => {
-                    Object.keys(newGroups[gKey]).forEach(secKey => {
+                // Sort and deduplicate tiers by stockType ascending within each group and sectionGradeKey
+                Object.keys(mergedGroups).forEach(gKey => {
+                    Object.keys(mergedGroups[gKey]).forEach(secKey => {
                         const bySt = {};
-                        newGroups[gKey][secKey].sort((a, b) => a.stockType - b.stockType).forEach(item => {
+                        mergedGroups[gKey][secKey].sort((a, b) => a.stockType - b.stockType).forEach(item => {
                             bySt[item.stockType] = item;
                         });
-                        newGroups[gKey][secKey] = Object.keys(bySt).map(Number).sort((a, b) => a - b).map(k => bySt[k]);
+                        mergedGroups[gKey][secKey] = Object.keys(bySt).map(Number).sort((a, b) => a - b).map(k => bySt[k]);
                     });
                 });
 
-                pdfCostingGroups = newGroups;
-                const discoveredGroups = Object.keys(pdfCostingGroups);
-                if (!pdfCostingGroups[selectedCostingGroup]) {
-                    selectedCostingGroup = discoveredGroups.includes('Truss') ? 'Truss' : discoveredGroups[0];
+                pdfCostingGroups = mergedGroups;
+                const newlyLoadedGroups = Array.from(touchedGroupsInThisPdf);
+                if (newlyLoadedGroups.length > 0) {
+                    selectedCostingGroup = newlyLoadedGroups.includes('Truss') ? 'Truss' : newlyLoadedGroups[0];
                 }
                 loadedCostingPdfName = file.name;
-                loadedCostingRowCount = parsedRowCount;
+                // Count total tiers across all stored groups
+                loadedCostingRowCount = Object.values(pdfCostingGroups).reduce((acc, gObj) =>
+                    acc + Object.values(gObj).reduce((s, arr) => s + arr.length, 0), 0
+                );
 
                 timberStockPrices = {};
                 applySelectedGroupPricesToMaterials();
@@ -1331,7 +1454,8 @@
                     renderOptimizationResultsUI();
                 }
 
-                showToast(`Saved ${parsedRowCount} price tiers across ${discoveredGroups.length} groups (${discoveredGroups.join(', ')}) to browser storage!`);
+                const allGroupsList = Object.keys(pdfCostingGroups);
+                showToast(`Parsed ${parsedRowCount} rows from ${file.name} (${allGroupsList.length} total group(s) active: ${allGroupsList.join(', ')})!`);
             } catch (err) {
                 console.error(err);
                 showToast("Failed to parse costing PDF file: " + (err.message || err), 'error');
@@ -1845,6 +1969,7 @@
                 return;
             }
 
+            applySelectedGroupPricesToMaterials();
             const strategy = document.getElementById('opt-strategy').value;
             const kerf = Number(document.getElementById('opt-kerf').value) || 0;
             const maxWasteThreshold = Number(document.getElementById('opt-max-waste').value) || 300;
@@ -1919,10 +2044,46 @@
                     if (activeStocks.length === 0) return;
 
                     const maxActiveStock = activeStocks[0];
+                    const isEconomicalMode = (strategy === 'economical_stack_2' || strategy === 'economical_single');
+                    const isStack2Mode = (strategy === 'stack_2' || strategy === 'economical_stack_2');
 
-                    // Helper: smallest active stock length that can hold `usedLen`
-                    function getSmallestFittingStock(usedLen) {
+                    // Helper: Dollar cost for a single board of length `stockLenMm` of material `mat`
+                    function getSingleBoardDollarCost(stockLenMm) {
+                        const rateLm = getMaterialStockPriceLm(mat, stockLenMm);
+                        return (Number(stockLenMm) / 1000.0) * rateLm;
+                    }
+
+                    // Helper: Check if material `mat` has positive (> $0.00) pricing configured
+                    const hasActivePricing = activeStocks.some(sLen => getMaterialStockPriceLm(mat, sLen) > 0);
+
+                    // Helper: Select optimal active stock length that can hold `usedLen`
+                    // - In Economical Mode (when pricing > $0 is loaded): evaluates all active stock lengths >= usedLen
+                    //   and picks the stock length with the LOWEST total board cost `(stockLen / 1000) * ($/lm)`
+                    //   (e.g., if 6000mm @ $2.66/lm = $15.96 is cheaper than 5400mm @ $4.86/lm = $26.24 or 3600mm @ $4.86/lm = $17.50, it chooses 6000mm!).
+                    //   Tie-breaks by smallest stock length so zero timber is wasted when $/lm rates are equal.
+                    // - In Standard Modes: picks the smallest active stock length >= usedLen.
+                    function getOptimalFittingStock(usedLen) {
                         if (strategy === 'longest_stock') return maxActiveStock;
+
+                        if (isEconomicalMode && hasActivePricing) {
+                            let bestStock = null;
+                            let minBoardCost = Infinity;
+
+                            // Iterate ascending from shortest to longest active stock so ties favor the shorter board
+                            for (let sIdx = activeStocks.length - 1; sIdx >= 0; sIdx--) {
+                                const candStock = activeStocks[sIdx];
+                                if (candStock >= usedLen) {
+                                    const candCost = getSingleBoardDollarCost(candStock);
+                                    if (candCost < minBoardCost - 1e-6) {
+                                        minBoardCost = candCost;
+                                        bestStock = candStock;
+                                    }
+                                }
+                            }
+                            if (bestStock !== null) return bestStock;
+                            return maxActiveStock;
+                        }
+
                         for (let sIdx = activeStocks.length - 1; sIdx >= 0; sIdx--) {
                             if (activeStocks[sIdx] >= usedLen) return activeStocks[sIdx];
                         }
@@ -1939,13 +2100,75 @@
                             const needed = member.lengthNormalized + kerf + memberSpacing;
                             let placed = false;
 
-                            if (useLikeMemberMode || strategy === 'bfd') {
+                            if (isEconomicalMode && hasActivePricing) {
+                                // Economical Cost Bin Selection:
+                                // Evaluates placing `member` into every existing bin where `newUsed <= maxActiveStock`.
+                                // Prioritizes the bin with the lowest marginal dollar cost `deltaCost = newBoardCost - currentBoardCost`
+                                // (for example, $0.00 marginal cost when it fits inside the current stock tier, or even negative marginal cost
+                                // if promoting from a pricier $/lm stock tier to a cheaper $/lm stock tier!), then tightest remnant `remAfter`.
+                                let bestBinIdx = -1;
+                                let minDeltaCost = Infinity;
+                                let minRemAfter = Infinity;
+
+                                localBins.forEach((bin, binIdx) => {
+                                    const newUsed = bin.usedLength + needed;
+                                    if (newUsed <= maxActiveStock) {
+                                        const curCost = getSingleBoardDollarCost(bin.stockLength);
+                                        const targetStock = getOptimalFittingStock(newUsed);
+                                        const newCost = getSingleBoardDollarCost(targetStock);
+                                        const deltaCost = newCost - curCost;
+                                        const remAfter = targetStock - newUsed;
+
+                                        if (
+                                            deltaCost < minDeltaCost - 1e-6 ||
+                                            (Math.abs(deltaCost - minDeltaCost) <= 1e-6 && remAfter < minRemAfter)
+                                        ) {
+                                            minDeltaCost = deltaCost;
+                                            minRemAfter = remAfter;
+                                            bestBinIdx = binIdx;
+                                        }
+                                    }
+                                });
+
+                                let chosenBinIdx = bestBinIdx;
+
+                                // Preserve Like-Member consecutive board continuity when marginal cost is identical and remnant is within 50mm
+                                if (useLikeMemberMode && member._likeKey === lastPlacedLikeKey && lastPlacedBinIdx !== -1 && bestBinIdx !== -1) {
+                                    const checkCandidates = [lastPlacedBinIdx, lastPlacedBinIdx + 1];
+                                    for (let cIdx = 0; cIdx < checkCandidates.length; cIdx++) {
+                                        const candBinIdx = checkCandidates[cIdx];
+                                        if (candBinIdx < localBins.length) {
+                                            const candNewUsed = localBins[candBinIdx].usedLength + needed;
+                                            if (candNewUsed <= maxActiveStock) {
+                                                const curCost = getSingleBoardDollarCost(localBins[candBinIdx].stockLength);
+                                                const candStock = getOptimalFittingStock(candNewUsed);
+                                                const candDelta = getSingleBoardDollarCost(candStock) - curCost;
+                                                const candRem = candStock - candNewUsed;
+                                                if (Math.abs(candDelta - minDeltaCost) <= 1e-6 && candRem <= minRemAfter + 50) {
+                                                    chosenBinIdx = candBinIdx;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (chosenBinIdx !== -1) {
+                                    localBins[chosenBinIdx].cuts.push(member);
+                                    localBins[chosenBinIdx].usedLength += needed;
+                                    localBins[chosenBinIdx].stockLength = getOptimalFittingStock(localBins[chosenBinIdx].usedLength);
+                                    localBins[chosenBinIdx].remnant = localBins[chosenBinIdx].stockLength - localBins[chosenBinIdx].usedLength;
+                                    lastPlacedBinIdx = chosenBinIdx;
+                                    lastPlacedLikeKey = member._likeKey;
+                                    placed = true;
+                                }
+                            } else if (useLikeMemberMode || strategy === 'bfd') {
                                 let bestBfdIdx = -1;
                                 let minRemainingAfter = Infinity;
                                 localBins.forEach((bin, binIdx) => {
                                     const newUsed = bin.usedLength + needed;
                                     if (newUsed <= maxActiveStock) {
-                                        const targetStock = getSmallestFittingStock(newUsed);
+                                        const targetStock = getOptimalFittingStock(newUsed);
                                         const remAfter = targetStock - newUsed;
                                         if (remAfter < minRemainingAfter) {
                                             minRemainingAfter = remAfter;
@@ -1963,7 +2186,7 @@
                                         if (candBinIdx < localBins.length) {
                                             const candNewUsed = localBins[candBinIdx].usedLength + needed;
                                             if (candNewUsed <= maxActiveStock) {
-                                                const candStock = getSmallestFittingStock(candNewUsed);
+                                                const candStock = getOptimalFittingStock(candNewUsed);
                                                 const candRem = candStock - candNewUsed;
                                                 if (candRem <= minRemainingAfter + 50) {
                                                     chosenBinIdx = candBinIdx;
@@ -1977,7 +2200,7 @@
                                 if (chosenBinIdx !== -1) {
                                     localBins[chosenBinIdx].cuts.push(member);
                                     localBins[chosenBinIdx].usedLength += needed;
-                                    localBins[chosenBinIdx].stockLength = getSmallestFittingStock(localBins[chosenBinIdx].usedLength);
+                                    localBins[chosenBinIdx].stockLength = getOptimalFittingStock(localBins[chosenBinIdx].usedLength);
                                     localBins[chosenBinIdx].remnant = localBins[chosenBinIdx].stockLength - localBins[chosenBinIdx].usedLength;
                                     lastPlacedBinIdx = chosenBinIdx;
                                     lastPlacedLikeKey = member._likeKey;
@@ -1989,7 +2212,7 @@
                                     if (newUsed <= maxActiveStock) {
                                         localBins[i].cuts.push(member);
                                         localBins[i].usedLength = newUsed;
-                                        localBins[i].stockLength = getSmallestFittingStock(newUsed);
+                                        localBins[i].stockLength = getOptimalFittingStock(newUsed);
                                         localBins[i].remnant = localBins[i].stockLength - newUsed;
                                         placed = true;
                                         break;
@@ -1999,7 +2222,7 @@
 
                             if (!placed) {
                                 const initUsed = member.lengthNormalized + memberSpacing;
-                                const chosenStock = getSmallestFittingStock(initUsed);
+                                const chosenStock = getOptimalFittingStock(initUsed);
 
                                 localBins.push({
                                     stackCount: binStackCount,
@@ -2072,7 +2295,7 @@
                     let bins = [];
                     let totalPhysicalMembersInMat = 0;
 
-                    if (strategy === 'stack_2') {
+                    if (isStack2Mode) {
                         // Phase 1: Split each member into 2-High Pairs (_stackQty = 2) and 1-High Odd Remainders (_stackQty = 1)
                         // If "Exclude Mitres (<)" is checked, members with '<' in their label (e.g. TC<.1, BC<.1) go straight to singlesPool (1-Board Single cuts)
                         const excludeMitreEl = document.getElementById('opt-exclude-mitre-stack');
@@ -2138,9 +2361,9 @@
                         // Phase 2: Pack 2-High Pairs into 2-Board Stacked Bins (stackCount = 2)
                         let pairBins = packUnitsIntoBins(pairsPool, 2, true);
 
-                        // Safeguard: Unstack a single-cut 2-High bin into singlesPool if either:
-                        // (a) 2 of that cut fit end-to-end on a single board of maxActiveStock using less total timber, OR
-                        // (b) singlesPool has an odd remainder piece (e.g. the 5th TC.2 M3) that can pair with one of them on a single board
+                        // Safeguard: Unstack a single-cut 2-High bin into singlesPool if:
+                        // (a) 2 of that cut fit end-to-end on a single board using less total cost (in Economical mode) or less total timber (in Standard mode), OR
+                        // (b) singlesPool has an odd remainder piece that can pair with one of them on a single board
                         let keptPairBins = [];
                         let availSingleLengths = singlesPool.map(s => s.lengthNormalized);
 
@@ -2148,7 +2371,18 @@
                             if (pb.cuts.length === 1) {
                                 const c = pb.cuts[0];
                                 const L = c.lengthNormalized;
-                                const canFitTwoEndToEnd = (2 * L + kerf + 2 * memberSpacing) <= maxActiveStock && (2 * pb.stockLength > maxActiveStock);
+                                const twoEndToEndLen = 2 * L + kerf + 2 * memberSpacing;
+                                let canFitTwoEndToEnd = false;
+                                if (twoEndToEndLen <= maxActiveStock) {
+                                    if (isEconomicalMode && hasActivePricing) {
+                                        const singleBoardStock = getOptimalFittingStock(twoEndToEndLen);
+                                        const singleBoardCost = getSingleBoardDollarCost(singleBoardStock);
+                                        const stackedTwoBoardsCost = 2 * getSingleBoardDollarCost(pb.stockLength);
+                                        canFitTwoEndToEnd = (singleBoardCost <= stackedTwoBoardsCost + 1e-6) && (singleBoardStock < 2 * pb.stockLength || singleBoardCost < stackedTwoBoardsCost - 1e-6);
+                                    } else {
+                                        canFitTwoEndToEnd = (2 * pb.stockLength > maxActiveStock);
+                                    }
+                                }
                                 const matchSingleIdx = availSingleLengths.findIndex(sL => (L + kerf + 2 * memberSpacing + sL) <= maxActiveStock);
 
                                 if (canFitTwoEndToEnd || matchSingleIdx !== -1) {
@@ -2177,7 +2411,7 @@
                         let singleBins = packUnitsIntoBins(singlesPool, 1, true);
                         bins = keptPairBins.concat(singleBins);
                     } else {
-                        // Standard 1-Board Expansion (like_member, bfd, ffd, largest, longest_stock)
+                        // Standard or Economical 1-Board Expansion (economical_single, like_member, bfd, ffd, largest, longest_stock)
                         let members = [];
                         rawMatMembers.forEach(m => {
                             const qty = m.quantityNormalized || Math.max(1, Number(m.quantity ?? m.Quantity ?? 1) || 1);
@@ -2197,7 +2431,7 @@
                             }
                         });
 
-                        if (strategy === 'like_member' || strategy === 'bfd' || strategy === 'ffd' || strategy === 'largest') {
+                        if (strategy === 'economical_single' || strategy === 'like_member' || strategy === 'bfd' || strategy === 'ffd' || strategy === 'largest') {
                             members.sort((a, b) => {
                                 if (b.lengthNormalized !== a.lengthNormalized) return b.lengthNormalized - a.lengthNormalized;
                                 if (a._sourceIndex !== b._sourceIndex) return (a._sourceIndex || 0) - (b._sourceIndex || 0);
@@ -2205,7 +2439,7 @@
                             });
                         }
 
-                        bins = packUnitsIntoBins(members, 1, strategy === 'like_member');
+                        bins = packUnitsIntoBins(members, 1, (strategy === 'like_member' || strategy === 'economical_single'));
                     }
 
                     // Always renumber piece counters sequentially (e.g. [1-2/6], [3-4/6], [5/6], [6/6]) in final board order
@@ -2326,7 +2560,13 @@
             };
 
             renderOptimizationResultsUI();
-            if (strategy === 'stack_2') {
+            if (strategy === 'economical_stack_2') {
+                const costStr = '$' + (optimizationResult.totalTimberCost || 0).toFixed(2);
+                showToast(`Economical 2-Board Stack complete: ${totalBoardsCount} boards (${totalStackedRuns}x 2-High) | Total Cost: ${costStr}!`);
+            } else if (strategy === 'economical_single') {
+                const costStr = '$' + (optimizationResult.totalTimberCost || 0).toFixed(2);
+                showToast(`Economical Single-Board complete: ${totalBoardsCount} boards | Total Cost: ${costStr}!`);
+            } else if (strategy === 'stack_2') {
                 showToast(`2-Board Stack Optimization complete: ${totalBoardsCount} boards in ${allOptimizedBoards.length} saw runs (${totalStackedRuns} stacked 2-high)!`);
             } else if (limitN) {
                 showToast(`Optimized across ${trussBatches.length} truss batch group(s) of ${limitN}!`);
