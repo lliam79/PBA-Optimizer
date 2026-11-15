@@ -880,8 +880,18 @@
         let pdfCostingGroups = {};
         let selectedCostingGroup = "";
         let timberStockPrices = {}; // Map: materialName -> { stockLengthMm: pricePerLm }
+        let customStockPriceOverrides = {}; // Map: materialName -> { stockLengthMm: manualPricePerLm }
         let loadedCostingPdfName = "";
         let loadedCostingRowCount = 0;
+
+        function hasManualOverride(matName, stockLenMm) {
+            const sLen = Number(stockLenMm);
+            return Boolean(
+                customStockPriceOverrides &&
+                customStockPriceOverrides[matName] &&
+                customStockPriceOverrides[matName][sLen] !== undefined
+            );
+        }
 
         function updateCostingStatusBadge() {
             const badgeEl = document.getElementById('costing-pdf-badge');
@@ -891,22 +901,26 @@
             const countEl = document.getElementById('costing-parsed-count');
 
             const groupNames = Object.keys(pdfCostingGroups || {});
-            const hasManualPrices = Object.keys(timberStockPrices || {}).some(m =>
+            const overrideCount = Object.keys(customStockPriceOverrides || {}).reduce(
+                (acc, m) => acc + Object.keys(customStockPriceOverrides[m] || {}).length, 0
+            );
+            const hasManualPrices = overrideCount > 0 || Object.keys(timberStockPrices || {}).some(m =>
                 Object.values(timberStockPrices[m] || {}).some(v => Number(v) > 0)
             );
 
             if (groupNames.length > 0) {
                 if (badgeEl) badgeEl.className = "flex items-center space-x-2 bg-indigo-950/80 border border-indigo-500/40 text-indigo-300 px-3.5 py-2 rounded-xl text-xs font-semibold";
                 if (iconEl) iconEl.className = "fa-solid fa-file-circle-check text-indigo-400";
-                if (statusEl) statusEl.textContent = `Saved: ${loadedCostingPdfName || 'Costing PDF'} (${groupNames.length} Groups)`;
+                const overrideSuffix = overrideCount > 0 ? ` + ${overrideCount} Custom` : '';
+                if (statusEl) statusEl.textContent = `Saved: ${loadedCostingPdfName || 'Costing PDF'} (${groupNames.length} Groups${overrideSuffix})`;
                 if (activeLbl) activeLbl.textContent = selectedCostingGroup || groupNames[0];
-                if (countEl) countEl.textContent = `${loadedCostingRowCount} rows`;
+                if (countEl) countEl.textContent = `${loadedCostingRowCount} rows${overrideSuffix}`;
             } else if (hasManualPrices) {
                 if (badgeEl) badgeEl.className = "flex items-center space-x-2 bg-amber-950/80 border border-amber-500/40 text-amber-300 px-3.5 py-2 rounded-xl text-xs font-semibold";
                 if (iconEl) iconEl.className = "fa-solid fa-pen-to-square text-amber-400";
-                if (statusEl) statusEl.textContent = "Custom Manual Rates (Saved)";
+                if (statusEl) statusEl.textContent = `Custom Manual Rates (${overrideCount || 'Saved'})`;
                 if (activeLbl) activeLbl.textContent = "Manual Rates";
-                if (countEl) countEl.textContent = "Custom";
+                if (countEl) countEl.textContent = `${overrideCount} custom`;
             } else {
                 if (badgeEl) badgeEl.className = "flex items-center space-x-2 bg-slate-900 border border-slate-700 text-slate-400 px-3.5 py-2 rounded-xl text-xs font-semibold";
                 if (iconEl) iconEl.className = "fa-solid fa-circle-minus text-slate-500";
@@ -916,12 +930,38 @@
             }
         }
 
+        // Harvest any edited input values directly from the DOM table before saving
+        function syncCostingInputsFromDOM() {
+            const inputs = document.querySelectorAll('#costing-table-body input[data-mat][data-stock]');
+            inputs.forEach(inp => {
+                const matName = inp.getAttribute('data-mat');
+                const sLen = Number(inp.getAttribute('data-stock'));
+                const val = parseFloat(inp.value);
+                if (matName && !isNaN(sLen) && !isNaN(val) && val >= 0) {
+                    if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+                    const { tiers } = findPdfTiersForMaterial(selectedCostingGroup, matName);
+                    const { costLm: pdfDefaultLm } = resolveStockLengthPriceFromTiers(tiers, sLen);
+
+                    timberStockPrices[matName][sLen] = val;
+                    // If the user changed the value away from the default PDF tier rate (or if no PDF is loaded and val > 0), lock it into customStockPriceOverrides
+                    if (Math.abs(val - pdfDefaultLm) > 1e-4 || (tiers.length === 0 && val > 0)) {
+                        if (!customStockPriceOverrides[matName]) customStockPriceOverrides[matName] = {};
+                        customStockPriceOverrides[matName][sLen] = val;
+                    }
+                }
+            });
+        }
+
         function saveCostingToStorage(showNotification = false) {
             try {
+                if (showNotification) {
+                    syncCostingInputsFromDOM();
+                }
                 const payload = {
                     groups: pdfCostingGroups,
                     selectedGroup: selectedCostingGroup,
                     customPrices: timberStockPrices,
+                    manualOverrides: customStockPriceOverrides,
                     fileName: loadedCostingPdfName,
                     rowCount: loadedCostingRowCount,
                     savedAt: new Date().toISOString()
@@ -929,7 +969,17 @@
                 localStorage.setItem(COSTING_STORAGE_KEY, JSON.stringify(payload));
                 updateCostingStatusBadge();
                 if (showNotification) {
-                    showToast("Timber costing saved to browser local storage! It will be retained across sessions.");
+                    initCostingTable();
+                    if (optimizationResult) {
+                        const curStrat = document.getElementById('opt-strategy') ? document.getElementById('opt-strategy').value : '';
+                        if (curStrat === 'economical_stack_2' || curStrat === 'economical_single') {
+                            runOptimization();
+                        } else {
+                            calculateTimberCosts(true);
+                            renderOptimizationResultsUI();
+                        }
+                    }
+                    showToast("Timber costing & custom stock-length prices saved! Your rates will hold across all tabs and sessions.");
                 }
             } catch (e) {
                 console.warn("Could not save costing data to localStorage:", e);
@@ -949,6 +999,7 @@
                     pdfCostingGroups = (saved.groups && typeof saved.groups === 'object') ? saved.groups : {};
                     selectedCostingGroup = saved.selectedGroup || "";
                     timberStockPrices = (saved.customPrices && typeof saved.customPrices === 'object') ? saved.customPrices : {};
+                    customStockPriceOverrides = (saved.manualOverrides && typeof saved.manualOverrides === 'object') ? saved.manualOverrides : {};
                     loadedCostingPdfName = saved.fileName || "";
                     loadedCostingRowCount = Number(saved.rowCount) || 0;
                 }
@@ -966,6 +1017,7 @@
             pdfCostingGroups = {};
             selectedCostingGroup = "";
             timberStockPrices = {};
+            customStockPriceOverrides = {};
             loadedCostingPdfName = "";
             loadedCostingRowCount = 0;
 
@@ -1011,7 +1063,6 @@
             if (!cleanMat) return { tiers: [], sourceGroup: null };
             const lowerMat = cleanMat.toLowerCase();
 
-            // Helper to check a single group dictionary for an exact (case-insensitive) match on Size + Grade(+Treatment)
             function matchInGroup(gName) {
                 const grpData = pdfCostingGroups[gName] || {};
                 if (grpData[cleanMat] && grpData[cleanMat].length > 0) {
@@ -1022,7 +1073,6 @@
                         return { tiers: grpData[k], sourceGroup: gName };
                     }
                 }
-                // Check reversed dimension order (e.g. PDF has "35x90 MGP10H2F" and .PSF has "90x35 MGP10H2F") with the EXACT same Grade+Treatment
                 const dimMatch = cleanMat.match(/^(\d+)\s*x\s*(\d+)\s+(.+)$/i);
                 if (dimMatch) {
                     const swappedKey = `${dimMatch[2]}x${dimMatch[1]} ${dimMatch[3]}`.toLowerCase();
@@ -1035,14 +1085,11 @@
                 return null;
             }
 
-            // 1. Check the currently selected costing group first
             if (groupName && pdfCostingGroups[groupName]) {
                 const primaryMatch = matchInGroup(groupName);
                 if (primaryMatch) return primaryMatch;
             }
 
-            // 2. If the job has mixed treatments across groups (e.g. Untreated in "Truss" and H2F/H3 in "TIMBER H2"),
-            // search other loaded groups for the EXACT same Size + Grade + Treatment key (never cross-matching different treatments)
             for (const otherGrp of Object.keys(pdfCostingGroups || {})) {
                 if (otherGrp === groupName) continue;
                 const otherMatch = matchInGroup(otherGrp);
@@ -1097,7 +1144,8 @@
             if (!newGroup) return;
             selectedCostingGroup = newGroup;
             timberStockPrices = {};
-            applySelectedGroupPricesToMaterials();
+            customStockPriceOverrides = {};
+            applySelectedGroupPricesToMaterials(true);
             saveCostingToStorage(false);
             initCostingTable();
             if (optimizationResult) {
@@ -1112,8 +1160,8 @@
             showToast(`Switched costing group to '${selectedCostingGroup}' and saved to browser storage.`);
         }
 
-        // Recompute `timberStockPrices[matName][stockLen]` from `pdfCostingGroups[selectedCostingGroup]`
-        function applySelectedGroupPricesToMaterials() {
+        // Populate `timberStockPrices[matName][stockLen]` while preserving any user-modified prices in `customStockPriceOverrides`
+        function applySelectedGroupPricesToMaterials(forceResetFromPdf = false) {
             const groupNames = Object.keys(pdfCostingGroups || {});
             if (!selectedCostingGroup && groupNames.length > 0) {
                 selectedCostingGroup = groupNames.includes('Truss') ? 'Truss' : groupNames[0];
@@ -1124,7 +1172,10 @@
                 const stockList = materialsConfig[matName].stockLengths || [];
                 stockList.forEach(sObj => {
                     const sLen = Number(sObj.length);
-                    if (tiers.length > 0) {
+                    // Always honor saved manual overrides first unless forceResetFromPdf is true
+                    if (!forceResetFromPdf && hasManualOverride(matName, sLen)) {
+                        timberStockPrices[matName][sLen] = Number(customStockPriceOverrides[matName][sLen]);
+                    } else if (tiers.length > 0) {
                         const { costLm } = resolveStockLengthPriceFromTiers(tiers, sLen);
                         timberStockPrices[matName][sLen] = costLm;
                     } else if (timberStockPrices[matName][sLen] === undefined) {
@@ -1136,7 +1187,10 @@
 
         function getMaterialStockPriceLm(matName, stockLenMm) {
             const sLen = Number(stockLenMm);
-            if (timberStockPrices[matName] && timberStockPrices[matName][sLen] !== undefined && Number(timberStockPrices[matName][sLen]) > 0) {
+            if (hasManualOverride(matName, sLen)) {
+                return Number(customStockPriceOverrides[matName][sLen]);
+            }
+            if (timberStockPrices[matName] && timberStockPrices[matName][sLen] !== undefined) {
                 return Number(timberStockPrices[matName][sLen]);
             }
             const { tiers } = findPdfTiersForMaterial(selectedCostingGroup, matName);
@@ -1146,16 +1200,40 @@
             return costLm;
         }
 
+        // Live preview handler while typing inside a stock-length rate input box
+        function previewMaterialStockPrice(inputEl, matName, stockLenMm) {
+            const sLen = Number(stockLenMm);
+            const p = parseFloat(inputEl.value);
+            if (!isNaN(p) && p >= 0) {
+                if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+                if (!customStockPriceOverrides[matName]) customStockPriceOverrides[matName] = {};
+                timberStockPrices[matName][sLen] = p;
+                customStockPriceOverrides[matName][sLen] = p;
+                const boardCostEl = inputEl.closest('.stock-price-card')?.querySelector('.board-cost-display');
+                if (boardCostEl) {
+                    boardCostEl.textContent = `= $${((sLen / 1000.0) * p).toFixed(2)} / board`;
+                }
+            }
+        }
+
         function updateMaterialStockPrice(matName, stockLenMm, newVal) {
+            const sLen = Number(stockLenMm);
             const p = parseFloat(newVal);
             if (!isNaN(p) && p >= 0) {
                 if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
-                timberStockPrices[matName][Number(stockLenMm)] = p;
+                if (!customStockPriceOverrides[matName]) customStockPriceOverrides[matName] = {};
+                timberStockPrices[matName][sLen] = p;
+                customStockPriceOverrides[matName][sLen] = p;
                 saveCostingToStorage(false);
                 initCostingTable();
                 if (optimizationResult) {
-                    calculateTimberCosts(true);
-                    renderOptimizationResultsUI();
+                    const curStrat = document.getElementById('opt-strategy') ? document.getElementById('opt-strategy').value : '';
+                    if (curStrat === 'economical_stack_2' || curStrat === 'economical_single') {
+                        runOptimization();
+                    } else {
+                        calculateTimberCosts(true);
+                        renderOptimizationResultsUI();
+                    }
                 }
             }
         }
@@ -1169,7 +1247,6 @@
 
             const matKeys = Object.keys(materialsConfig);
             if (matKeys.length === 0) {
-                // If no .PSF file is loaded yet, but a Costing PDF IS loaded, show a preview of all parsed Grade+Treatment sections in the selected group!
                 const grpData = pdfCostingGroups[selectedCostingGroup] || {};
                 const pdfSecKeys = Object.keys(grpData);
                 if (pdfSecKeys.length > 0) {
@@ -1229,23 +1306,29 @@
                     const sLen = Number(sObj.length);
                     const rateLm = getMaterialStockPriceLm(matName, sLen);
                     const boardCost = ((sLen / 1000.0) * rateLm).toFixed(2);
+                    const isManual = hasManualOverride(matName, sLen);
                     const { matchedStockType } = resolveStockLengthPriceFromTiers(tiers, sLen);
-                    const tierHint = matchedStockType ? `Tier &le;${matchedStockType}mm` : 'Manual';
-                    const activeBorder = sObj.active ? 'border-slate-700 bg-slate-900' : 'border-slate-800/60 bg-slate-950/50 opacity-55';
+                    const tierHint = isManual
+                        ? `<span class="text-amber-400 font-semibold">Custom (Saved)</span>`
+                        : (matchedStockType ? `Tier &le;${matchedStockType}mm` : 'Manual');
+                    const activeBorder = !sObj.active
+                        ? 'border-slate-800/60 bg-slate-950/50 opacity-55'
+                        : (isManual ? 'border-amber-500/50 bg-slate-900' : 'border-slate-700 bg-slate-900');
                     const activeTag = sObj.active ? '' : ' (Inactive)';
+                    const safeMatAttr = matName.replace(/"/g, '&quot;');
 
                     return `
-                        <div class="inline-flex flex-col border ${activeBorder} rounded-xl p-2.5 min-w-[165px]">
+                        <div class="stock-price-card inline-flex flex-col border ${activeBorder} rounded-xl p-2.5 min-w-[165px]">
                             <div class="flex items-center justify-between text-xs mb-1.5">
                                 <span class="font-bold text-white">${sLen} mm${activeTag}</span>
                                 <span class="text-[10px] text-slate-400">${tierHint}</span>
                             </div>
                             <div class="flex items-center space-x-1 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1">
                                 <span class="text-slate-400 text-xs">$</span>
-                                <input type="number" step="0.01" min="0" value="${rateLm.toFixed(2)}" onchange="updateMaterialStockPrice('${matName}', ${sLen}, this.value)" class="w-16 bg-transparent text-white font-mono text-xs text-right focus:outline-none">
+                                <input type="number" step="0.01" min="0" data-mat="${safeMatAttr}" data-stock="${sLen}" value="${rateLm.toFixed(2)}" oninput="previewMaterialStockPrice(this, '${matName}', ${sLen})" onchange="updateMaterialStockPrice('${matName}', ${sLen}, this.value)" class="w-16 bg-transparent text-white font-mono text-xs text-right focus:outline-none">
                                 <span class="text-slate-400 text-[11px]">/lm</span>
                             </div>
-                            <div class="text-right text-[11px] text-emerald-400 font-mono font-semibold mt-1">
+                            <div class="board-cost-display text-right text-[11px] text-emerald-400 font-mono font-semibold mt-1">
                                 = $${boardCost} / board
                             </div>
                         </div>
@@ -1284,11 +1367,6 @@
         }
 
         // Parse uploaded Pryda Timber Report PDF:
-        // Rule:
-        // - If Treatment is "Untreated" (case-insensitive), grade remains <Grade> (e.g. "90x35 MGP10").
-        // - If Treatment has any treatment text (e.g. "H2 treated", "H2F ENVELOPE", "H3 LOSP"),
-        //   the first word of Treatment ("H2", "H2F", "H3") is appended to <Grade> (e.g. "90x35 MGP10H2", "90x35 MGP10H2F", "90x35 MGP10H3").
-        // - Each treatment type is stored under its own distinct key so jobs with both treated and untreated timber are costed accurately.
         async function parseCostingPdf(file) {
             try {
                 if (typeof pdfjsLib === 'undefined') {
@@ -1310,7 +1388,6 @@
                     });
                 }
 
-                // Filter out page headers, footers, and column title tokens
                 const skipExact = new Set([
                     "timber", "group", "grade", "treatment", "actual", "depth", "thick",
                     "stock type", "stock", "type", "cost", "cost l/mtr", "cost c/mtr",
@@ -1326,9 +1403,6 @@
                     cleanedTokens.push(tok.trim());
                 });
 
-                // Group stream tokens into complete logical records:
-                // - "Timber Description: ..." is a group header record
-                // - Data rows end with two currency numbers ($Cost_L_Mtr and $Cost_C_Mtr), merging multi-word/wrapped treatments like "H2 treated", "H2F ENVELOPE", "H3 LOSP"
                 let logicalRecords = [];
                 let buf = [];
                 const pricePairEndRegex = /(?:\$\s*\d+\.\d+|\d+\.\d+\s*\$)\s+(?:\$\s*\d+\.\d+|\d+\.\d+\s*\$)$/;
@@ -1354,7 +1428,6 @@
                 const descRegex = /Timber\s+Description:\s*(.+)/i;
                 const rowRegex = /^(?:(\d+)\s+)?([A-Za-z0-9_+-]+)\s+(.+?)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+\$?(\d+\.\d+)\$?\s+\$?(\d+\.\d+)\$?$/;
 
-                // Merge with existing groups so users can load both Untreated and Treated PDFs if they are in separate files
                 let mergedGroups = JSON.parse(JSON.stringify(pdfCostingGroups || {}));
                 let touchedGroupsInThisPdf = new Set();
                 let groupNamesById = {};
@@ -1373,11 +1446,6 @@
                         const grpId = mRow[1] || '';
                         const grade = mRow[2].trim();
                         const treatmentFull = mRow[3].trim();
-                        // Extract the first word of the Treatment column:
-                        // - "Untreated" -> firstTreatWord = "Untreated" -> grade remains MGP10
-                        // - "H2 treated" -> firstTreatWord = "H2" -> grade becomes MGP10H2
-                        // - "H2F ENVELOPE" -> firstTreatWord = "H2F" -> grade becomes MGP10H2F
-                        // - "H3 LOSP" -> firstTreatWord = "H3" -> grade becomes MGP10H3
                         const firstTreatWord = treatmentFull.split(/\s+/)[0] || '';
                         const depth = parseInt(mRow[4], 10);
                         const thick = parseInt(mRow[5], 10);
@@ -1390,7 +1458,6 @@
                         }
                         const resolvedGroup = (grpId && groupNamesById[grpId]) ? groupNamesById[grpId] : currentDesc;
 
-                        // Reset group if it's the first time we see this group in the newly uploaded PDF
                         if (!touchedGroupsInThisPdf.has(resolvedGroup)) {
                             touchedGroupsInThisPdf.add(resolvedGroup);
                             mergedGroups[resolvedGroup] = {};
@@ -1422,7 +1489,6 @@
                     return;
                 }
 
-                // Sort and deduplicate tiers by stockType ascending within each group and sectionGradeKey
                 Object.keys(mergedGroups).forEach(gKey => {
                     Object.keys(mergedGroups[gKey]).forEach(secKey => {
                         const bySt = {};
@@ -1439,19 +1505,24 @@
                     selectedCostingGroup = newlyLoadedGroups.includes('Truss') ? 'Truss' : newlyLoadedGroups[0];
                 }
                 loadedCostingPdfName = file.name;
-                // Count total tiers across all stored groups
                 loadedCostingRowCount = Object.values(pdfCostingGroups).reduce((acc, gObj) =>
                     acc + Object.values(gObj).reduce((s, arr) => s + arr.length, 0), 0
                 );
 
                 timberStockPrices = {};
-                applySelectedGroupPricesToMaterials();
+                customStockPriceOverrides = {};
+                applySelectedGroupPricesToMaterials(true);
                 saveCostingToStorage(false);
                 initCostingTable();
 
                 if (optimizationResult) {
-                    calculateTimberCosts(true);
-                    renderOptimizationResultsUI();
+                    const curStrat = document.getElementById('opt-strategy') ? document.getElementById('opt-strategy').value : '';
+                    if (curStrat === 'economical_stack_2' || curStrat === 'economical_single') {
+                        runOptimization();
+                    } else {
+                        calculateTimberCosts(true);
+                        renderOptimizationResultsUI();
+                    }
                 }
 
                 const allGroupsList = Object.keys(pdfCostingGroups);
@@ -1464,6 +1535,8 @@
 
         // Calculate and allocate stock-length-specific costs to all boards in optimizationResult
         function calculateTimberCosts(silent = false) {
+            syncCostingInputsFromDOM();
+            saveCostingToStorage(false);
             if (!optimizationResult || !optimizationResult.boards || optimizationResult.boards.length === 0) {
                 if (!silent) showToast("Please run the optimizer first before calculating timber costs.", 'error');
                 return;
@@ -1552,8 +1625,9 @@
 
         // Tab Switching (Includes 'costing' in tab list so switching tabs hides #tab-costing cleanly)
         function switchTab(tabId) {
+            syncCostingInputsFromDOM();
             if (tabId === 'costing') {
-                applySelectedGroupPricesToMaterials();
+                applySelectedGroupPricesToMaterials(false);
                 initCostingTable();
                 if (optimizationResult) calculateTimberCosts(true);
             }
