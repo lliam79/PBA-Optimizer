@@ -2935,6 +2935,7 @@
         }
     
         // Print Consolidated Stock Draw (with Per-Stock-Length Cost L/Mtr & Total Cost)
+                // Print Consolidated Stock Draw (Without Cost L/Mtr and Total Cost columns)
         function printConsolidatedStockDraw() {
             if (!optimizationResult) {
                 showToast("Please run the optimizer first before printing stock draw.", 'error');
@@ -2948,7 +2949,7 @@
                 <html lang="en">
                 <head>
                     <meta charset="UTF-8">
-                    <title>Consolidated Stock Draw & Costing Report - PBA Optimizer</title>
+                    <title>Consolidated Stock Draw Report - PBA Optimizer</title>
                     <style>
                         body { font-family: Arial, sans-serif; padding: 20px; color: #111; }
                         h1 { font-size: 20px; margin-bottom: 5px; }
@@ -2964,8 +2965,8 @@
                     </style>
                 </head>
                 <body>
-                    <h1>PBA OPTIMIZER - CONSOLIDATED STOCK DRAW & COSTING REPORT</h1>
-                    <p>Project File: ${currentFileName} | Costing Group: <strong>${selectedCostingGroup || "Blank"}</strong> | Generated: ${new Date().toLocaleString()}</p>
+                    <h1>PBA OPTIMIZER - CONSOLIDATED STOCK DRAW REPORT</h1>
+                    <p>Project File: ${currentFileName} | Generated: ${new Date().toLocaleString()}</p>
                     
                     <table>
                         <thead>
@@ -2974,32 +2975,27 @@
                                 <th class="text-center">Total Boards</th>
                                 <th class="text-center">Members Cut</th>
                                 <th class="text-right">Stock Length (mm)</th>
-                                <th class="text-right">Cost L/Mtr ($/lm)</th>
                                 <th class="text-right">Total Stock (m)</th>
                                 <th class="text-right">Total Cut (m)</th>
                                 <th class="text-right">Reusable Stock (m)</th>
                                 <th class="text-right">Waste (m)</th>
-                                <th class="text-right">Total Cost ($)</th>
                             </tr>
                         </thead>
                         <tbody>
             `;
 
-            let grandBoards = 0, grandMembers = 0, grandStockM = 0, grandCutM = 0, grandReusableM = 0, grandWasteM = 0, grandCost = 0;
+            let grandBoards = 0, grandMembers = 0, grandStockM = 0, grandCutM = 0, grandReusableM = 0, grandWasteM = 0;
 
             Object.keys(optimizationResult.summary).forEach(mat => {
                 const s = optimizationResult.summary[mat];
                 let stockBreakdown = {};
-                let matCostTotal = 0;
 
                 optimizationResult.boards.filter(b => b.material === mat).forEach(b => {
                     const sLen = b.stockLength;
                     const sCount = b.stackCount || 1;
-                    const rateLm = b._unitPriceLm || getMaterialStockPriceLm(mat, sLen);
-                    const runCost = b._allocatedCost || ((Number(sLen) / 1000.0) * rateLm * sCount);
 
                     if (!stockBreakdown[sLen]) {
-                        stockBreakdown[sLen] = { boards: 0, members: 0, stockLenMm: 0, cutLenMm: 0, reusableMm: 0, wasteMm: 0, rateLm: rateLm, cost: 0 };
+                        stockBreakdown[sLen] = { boards: 0, members: 0, stockLenMm: 0, cutLenMm: 0, reusableMm: 0, wasteMm: 0 };
                     }
                     const singleCutMm = b.cuts.reduce((acc, c) => acc + c.lengthNormalized, 0);
                     const totalMembersInRun = b.cuts.reduce((acc, c) => acc + (c._stackQty || sCount), 0);
@@ -3007,8 +3003,6 @@
                     stockBreakdown[sLen].members += totalMembersInRun;
                     stockBreakdown[sLen].stockLenMm += Number(sLen) * sCount;
                     stockBreakdown[sLen].cutLenMm += singleCutMm * sCount;
-                    stockBreakdown[sLen].cost += runCost;
-                    matCostTotal += runCost;
                     if (b.isReusable) {
                         stockBreakdown[sLen].reusableMm += b.remnant * sCount;
                     } else {
@@ -3028,12 +3022,10 @@
                             <td class="text-center">${grp.boards}</td>
                             <td class="text-center">${grp.members}</td>
                             <td class="text-right">${stockLen} mm</td>
-                            <td class="text-right">$${grp.rateLm.toFixed(2)} /lm</td>
                             <td class="text-right">${stockM} m</td>
                             <td class="text-right">${cutM} m</td>
                             <td class="text-right">${reM} m</td>
                             <td class="text-right">${wM} m</td>
-                            <td class="text-right"><strong>$${grp.cost.toFixed(2)}</strong></td>
                         </tr>
                     `;
                 });
@@ -3044,12 +3036,10 @@
                         <td class="text-center">${s.totalBoards}</td>
                         <td class="text-center">${s.totalMembers}</td>
                         <td class="text-right">All Lengths</td>
-                        <td class="text-right">-</td>
                         <td class="text-right">${s.totalStockM} m</td>
                         <td class="text-right">${s.totalCutM} m</td>
                         <td class="text-right">${s.reusableM} m</td>
                         <td class="text-right">${s.wasteM} m</td>
-                        <td class="text-right">$${matCostTotal.toFixed(2)}</td>
                     </tr>
                 `;
 
@@ -3059,21 +3049,18 @@
                 grandCutM += Number(s.totalCutM);
                 grandReusableM += Number(s.reusableM);
                 grandWasteM += Number(s.wasteM);
-                grandCost += matCostTotal;
             });
 
             htmlContent += `
                 <tr style="background-color: #e2e8f0; font-weight: bold; border-top: 2px solid #334155;">
-                    <td>GRAND TOTAL (${selectedCostingGroup || "Blank"})</td>
+                    <td>GRAND TOTAL</td>
                     <td class="text-center">${grandBoards}</td>
                     <td class="text-center">${grandMembers}</td>
-                    <td class="text-right">-</td>
                     <td class="text-right">-</td>
                     <td class="text-right">${grandStockM.toFixed(2)} m</td>
                     <td class="text-right">${grandCutM.toFixed(2)} m</td>
                     <td class="text-right">${grandReusableM.toFixed(2)} m</td>
                     <td class="text-right">${grandWasteM.toFixed(2)} m</td>
-                    <td class="text-right">$${grandCost.toFixed(2)}</td>
                 </tr>
             `;
 
@@ -3130,7 +3117,6 @@
             printWindow.document.close();
             printWindow.focus();
         }
-
         // Reprocess & Reset Stock from File
         function resetStockToDefaults() {
             const isAdmin = currentUser && currentUser.role === 'Admin';
