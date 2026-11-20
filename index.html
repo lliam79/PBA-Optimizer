@@ -309,7 +309,7 @@
                         <div class="space-y-2 flex flex-col justify-between h-full">
                             <div>
                                 <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Member Spacing (mm)</label>
-                                <input type="number" id="opt-member-spacing" value="0" min="0" max="50" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                                <input type="number" id="opt-member-spacing" value="0" min="0" max="500" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
                             </div>
                             <p class="text-xs text-slate-400 mt-2">Extra gap between cuts for sawyer clearance.</p>
                         </div>
@@ -3653,7 +3653,8 @@
                             }, 300);
                         };
                     <\/script>
-                </body>
+                
+</body>
                 </html>
             `;
 
@@ -3943,6 +3944,34 @@
                             padding: 0 6px;
                             position: relative;
                         }
+                        .spacer-segment {
+                            height: 100%;
+                            flex-shrink: 0;
+                            background: repeating-linear-gradient(
+                                -45deg,
+                                rgba(248, 113, 113, 0.18),
+                                rgba(248, 113, 113, 0.18) 4px,
+                                rgba(15, 23, 42, 0.85) 4px,
+                                rgba(15, 23, 42, 0.85) 8px
+                            );
+                            border-left: 1px dashed rgba(248, 113, 113, 0.65);
+                            border-right: 1px dashed rgba(248, 113, 113, 0.65);
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            overflow: hidden;
+                            box-sizing: border-box;
+                        }
+                        .spacer-label {
+                            font-size: 8px;
+                            font-weight: 700;
+                            color: #fca5a5;
+                            writing-mode: vertical-rl;
+                            transform: rotate(180deg);
+                            line-height: 1;
+                            white-space: nowrap;
+                            pointer-events: none;
+                        }
                         .segment-svg {
                             position: absolute;
                             inset: 0;
@@ -4007,8 +4036,11 @@
                 </head>
                 <body>
                     <h1>PBA OPTIMIZER - VISUAL BOARD CUTTING DIAGRAMS & MEMBER ANGLES</h1>
-                    <p>Project File: ${currentFileName} | Generated: ${new Date().toLocaleString()}</p>
+                    <p>Project File: ${currentFileName} | Generated: ${new Date().toLocaleString()} | Kerf: ${Number(document.getElementById('opt-kerf')?.value) || 0}mm | Member Spacing: ${Number(document.getElementById('opt-member-spacing')?.value) || 0}mm</p>
             `;
+
+            const visKerf = Number(document.getElementById('opt-kerf')?.value) || 0;
+            const visSpacing = Number(document.getElementById('opt-member-spacing')?.value) || 0;
 
             optimizationResult.boards.forEach(b => {
                 let stockLen = Number(b.stockLength);
@@ -4034,6 +4066,21 @@
                             <div class="segment-sub">${cutLen}mm [${geom.angleText}]</div>
                         </div>
                     `;
+
+                    const isLastCut = (cIdx === b.cuts.length - 1);
+                    const gapMm = isLastCut ? visSpacing : (visSpacing + visKerf);
+                    if (gapMm > 0) {
+                        const gapWidthPct = (gapMm / stockLen) * 100;
+                        const gapTitle = isLastCut
+                            ? `End Spacing: ${visSpacing}mm`
+                            : `Member Spacing: ${visSpacing}mm${visKerf > 0 ? ' + Kerf: ' + visKerf + 'mm' : ''} (Total: ${gapMm}mm)`;
+                        const showGapLabel = gapMm >= 40;
+                        segmentsHtml += `
+                            <div class="spacer-segment" style="width: ${gapWidthPct}%;" title="${gapTitle}">
+                                ${showGapLabel ? `<span class="spacer-label">${gapMm}mm</span>` : ''}
+                            </div>
+                        `;
+                    }
                 });
 
                 if (b.remnant > 0) {
@@ -4093,13 +4140,13 @@
             }
         }
 
-        async function sendStockDrawToStockHub() {
+        async function sendStockDrawToStockHub(forceOverride = false) {
             if (!optimizationResult || !optimizationResult.boards || optimizationResult.boards.length === 0) {
                 showToast("Please run the optimizer first before sending stock draw.", "error");
                 return;
             }
-            if (stockDrawSent) {
-                if (!confirm("This job's Stock Draw has already been sent to $tock Hub. Send it again?")) {
+            if (stockDrawSent && !forceOverride) {
+                if (!confirm("This job's Stock Draw has already been sent to $tock Hub in this session. Send it again?")) {
                     return;
                 }
             }
@@ -4123,57 +4170,84 @@
             const jobLabel = currentFileName ? currentFileName.replace(/\.[^/.]+$/, "") : "Manual Run";
             const previewLines = items.map(it => `• ${it.quantity}x ${it.product_code} @ ${it.stock_length}mm`).join("\n");
 
-            if (!confirm(`Deduct ${items.length} timber line(s) for job "${jobLabel}" from $tock Hub?\n\n${previewLines}`)) {
-                return;
+            if (!forceOverride) {
+                if (!confirm(`Deduct ${items.length} timber line(s) for job "${jobLabel}" from $tock Hub and record in Production Orders?\n\n${previewLines}`)) {
+                    return;
+                }
             }
 
             const btn = document.getElementById('btn-send-stock-hub');
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>Sending...</span>';
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>Syncing...</span>';
             }
 
-            let successCount = 0;
-            let errors = [];
             const operatorName = (currentUser && currentUser.username) ? currentUser.username : "PBA Optimizer";
 
-            for (const item of items) {
-                try {
-                    const res = await fetch(`${STOCK_HUB_URL}/api/deduct`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                            item_type: "TIMBER",
-                            product_code: item.product_code,
-                            stock_length: item.stock_length,
-                            quantity: item.quantity,
-                            username: operatorName,
-                            notes: `PBA Optimizer Stock Draw (${jobLabel})`
-                        })
+            try {
+                const res = await fetch(`${STOCK_HUB_URL}/api/optimizer/sync-production`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        job_name: jobLabel,
+                        file_name: currentFileName || "",
+                        username: operatorName,
+                        force: Boolean(forceOverride),
+                        items: items
+                    })
+                });
+                const data = await res.json().catch(() => ({}));
+
+                if (btn) btn.disabled = false;
+
+                // Server-side duplicate job protection (HTTP 409)
+                if (res.status === 409 && data.status === "duplicate") {
+                    stockDrawSent = true;
+                    updateSendStockHubButtonState();
+                    const forceConfirmed = await new Promise((resolve) => {
+                        const modal = document.getElementById("duplicateJobModal");
+                        document.getElementById("dupJobName").textContent = `"${jobLabel}"`;
+                        document.getElementById("dupJobTime").textContent = data.existing_timestamp || "an earlier run";
+                        document.getElementById("dupJobBy").textContent = data.existing_created_by || "System";
+                        document.getElementById("dupJobOrderId").textContent = `#${data.existing_order_id}`;
+                        document.getElementById("dupJobSummary").textContent = data.existing_summary || "-";
+                        modal.style.display = "flex";
+
+                        const cancelBtn = document.getElementById("dupJobCancelBtn");
+                        const forceBtn = document.getElementById("dupJobForceBtn");
+                        const cleanup = (val) => {
+                            modal.style.display = "none";
+                            cancelBtn.onclick = null;
+                            forceBtn.onclick = null;
+                            resolve(val);
+                        };
+                        cancelBtn.onclick = () => cleanup(false);
+                        forceBtn.onclick = () => cleanup(true);
                     });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok || data.status === "error" || data.error) {
-                        errors.push(`${item.product_code} @ ${item.stock_length}mm: ${data.error || data.message || res.statusText}`);
-                    } else {
-                        successCount++;
+                    if (forceConfirmed) {
+                        return sendStockDrawToStockHub(true);
                     }
-                } catch (err) {
-                    errors.push(`${item.product_code} @ ${item.stock_length}mm: ${err.message}`);
+                    showToast(`Sync cancelled — Job "${jobLabel}" is already recorded in Production Orders (#${data.existing_order_id}).`, "error");
+                    return;
                 }
-            }
 
-            if (btn) btn.disabled = false;
+                if (!res.ok || data.status !== "success") {
+                    updateSendStockHubButtonState();
+                    const errText = data.message || data.error || res.statusText || "Unknown error";
+                    alert(`Could not sync Stock Draw to $tock Hub (no stock was deducted):\n\n${errText}`);
+                    showToast(`Sync failed: ${errText}`, "error");
+                    return;
+                }
 
-            if (errors.length === 0) {
                 stockDrawSent = true;
                 updateSendStockHubButtonState();
-                showToast(`Deducted all ${successCount} timber line(s) in $tock Hub for ${jobLabel}!`);
+                showToast(`Synced ${data.lines_deducted} timber line(s) & logged Production Order #${data.production_order_id} for "${jobLabel}"!`);
                 syncStockFromStockHub(true);
-            } else {
+            } catch (err) {
+                if (btn) btn.disabled = false;
                 updateSendStockHubButtonState();
-                console.error("Stock Hub deduction errors:", errors);
-                alert(`Deducted ${successCount}/${items.length} line(s). Unmatched / failed lines:\n\n• ` + errors.join("\n• "));
-                showToast(`Deducted ${successCount}/${items.length} lines. ${errors.length} failed.`, "error");
+                alert(`Network error syncing with $tock Hub:\n\n${err.message}`);
+                showToast(`Sync failed: ${err.message}`, "error");
             }
         }
 
@@ -4332,5 +4406,43 @@
         });
 
 </script>
+
+    <!-- Server-Side Duplicate-Job Protection Warning Modal -->
+    <div id="duplicateJobModal" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(0,0,0,0.68); align-items:center; justify-content:center; padding:16px;">
+        <div style="background:#ffffff; border:3px solid #dc2626; border-radius:12px; max-width:520px; width:100%; box-shadow:0 20px 50px rgba(220,38,38,0.35); overflow:hidden; font-family:inherit;">
+            <div style="background:#dc2626; color:#ffffff; padding:16px 20px; display:flex; align-items:center; gap:12px;">
+                <span style="font-size:30px; line-height:1;" aria-hidden="true">&#9888;&#65039;</span>
+                <div>
+                    <div style="font-size:18px; font-weight:900; letter-spacing:0.4px; text-transform:uppercase;">DUPLICATE JOB DETECTED!</div>
+                    <div style="font-size:12px; opacity:0.95; font-weight:600;">Server-Side Duplicate-Job Protection</div>
+                </div>
+            </div>
+            <div style="padding:20px; color:#1f2937; font-size:14px; line-height:1.5;">
+                <div style="background:#fef2f2; border:2px solid #f87171; border-radius:8px; padding:12px 14px; margin-bottom:14px; color:#b91c1c; font-weight:700;">
+                    &#9888;&#65039; Job <span id="dupJobName" style="text-decoration:underline;"></span> was ALREADY synced to $tock Hub!
+                </div>
+                <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px; margin-bottom:14px; font-size:13px;">
+                    <div><strong>Synced On:</strong> <span id="dupJobTime">-</span></div>
+                    <div><strong>Synced By:</strong> <span id="dupJobBy">-</span></div>
+                    <div><strong>Production Order:</strong> <span id="dupJobOrderId">-</span></div>
+                    <div style="margin-top:4px;"><strong>Previous Summary:</strong> <span id="dupJobSummary">-</span></div>
+                </div>
+                <div style="color:#dc2626; font-weight:800; font-size:14px; margin-bottom:4px;">
+                    &#9888;&#65039; WARNING: Syncing again will deduct this timber stock a SECOND time.
+                </div>
+                <div style="font-size:12.5px; color:#4b5563;">
+                    Click <strong>Cancel (Keep Existing Record)</strong> unless you intentionally want to deduct this job again.
+                </div>
+            </div>
+            <div style="background:#f9fafb; border-top:1px solid #e5e7eb; padding:12px 20px; display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap;">
+                <button type="button" id="dupJobCancelBtn" style="background:#1f2937; color:#ffffff; border:none; border-radius:7px; padding:9px 16px; font-size:13.5px; font-weight:700; cursor:pointer;">
+                    Cancel (Keep Existing Record)
+                </button>
+                <button type="button" id="dupJobForceBtn" style="background:#dc2626; color:#ffffff; border:none; border-radius:7px; padding:9px 16px; font-size:13.5px; font-weight:700; cursor:pointer;">
+                    &#9888;&#65039; Force Duplicate Sync
+                </button>
+            </div>
+        </div>
+    </div>
 </body>
 </html>
