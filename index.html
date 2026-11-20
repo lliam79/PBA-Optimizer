@@ -213,7 +213,15 @@
                         <h2 class="text-2xl font-bold text-white">Material & Stock Length Management</h2>
                         <p class="text-sm text-slate-400 mt-1">Review extracted timber grades/sizes, manage available stock lengths, save/load profiles, and add custom materials.</p>
                     </div>
-                    <div class="flex items-center space-x-3">
+                    <div class="flex items-center flex-wrap gap-2.5">
+                        <div id="stockhub-sync-badge" class="flex items-center space-x-2 bg-slate-900 border border-slate-700 text-slate-400 px-3 py-2 rounded-xl text-xs font-semibold">
+                            <i id="stockhub-sync-icon" class="fa-solid fa-circle-dot text-slate-500"></i>
+                            <span id="stockhub-sync-text">$tock Hub: Checking...</span>
+                        </div>
+                        <button onclick="syncStockFromStockHub(false)" class="bg-sky-600 hover:bg-sky-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-md shadow-sky-600/20 transition-all" title="Pull live timber stock lengths, on-hand board counts, and LM costs from $tock Hub">
+                            <i class="fa-solid fa-arrows-rotate"></i>
+                            <span>Sync from $tock Hub</span>
+                        </button>
                         <button onclick="resetStockToDefaults()" class="bg-slate-800 hover:bg-slate-700 text-white font-semibold px-4 py-2.5 rounded-xl text-sm border border-slate-700 flex items-center space-x-2" title="Reset all materials to default stock lengths">
                             <i class="fa-solid fa-rotate-right text-amber-400"></i>
                             <span>Reset Stock</span>
@@ -267,7 +275,7 @@
                 </div>
 
                 <div class="bg-slate-950 border border-slate-800 rounded-2xl p-6 space-y-6">
-                    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-8 gap-5 items-start">
+                    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-3 xl:grid-cols-9 gap-5 items-start">
                         <div class="space-y-2 flex flex-col justify-between h-full">
                             <div>
                                 <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Optimization Strategy</label>
@@ -342,6 +350,16 @@
                             </div>
                             <p class="text-xs text-slate-400 mt-2">Prioritizes nominated reuse stock lengths first regardless of waste.</p>
                         </div>
+                        <div class="space-y-2 flex flex-col justify-between h-full">
+                            <div>
+                                <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">$tock Hub Cap</label>
+                                <label class="flex items-center space-x-2.5 bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 cursor-pointer hover:border-sky-500" title="Limit each stock length to on-hand board quantity in $tock Hub and roll overflow to the next in-stock length">
+                                    <input type="checkbox" id="opt-cap-stock-hub" checked onchange="if(optimizationResult) runOptimization()" class="rounded bg-slate-800 border-slate-700 text-sky-500 focus:ring-0">
+                                    <span class="text-xs font-semibold text-white">Cap to Stock</span>
+                                </label>
+                            </div>
+                            <p class="text-xs text-slate-400 mt-2">Caps boards to live $tock Hub stock; rolls overflow to next length.</p>
+                        </div>
                     </div>
 
                     <div class="border-t border-slate-800 pt-6 flex items-center justify-between">
@@ -362,6 +380,8 @@
                         <i class="fa-solid fa-circle-check"></i>
                         <span>Optimization Complete Successfully!</span>
                     </h3>
+                    <div id="opt-oversized-banner" class="hidden mb-3 p-3 rounded-lg bg-red-950/90 border-2 border-red-500 text-red-100 text-xs space-y-1"></div>
+                <div id="opt-shortfall-banner" class="hidden bg-red-950/80 border border-red-500/50 text-red-200 rounded-xl p-4 text-xs space-y-1"></div>
                     <div id="opt-summary-metrics" class="grid grid-cols-2 md:grid-cols-4 gap-4">
                         <!-- Populated dynamically -->
                     </div>
@@ -398,6 +418,10 @@
                         <button onclick="printConsolidatedStockDraw()" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-indigo-600/20">
                             <i class="fa-solid fa-print"></i>
                             <span>Print Stock Draw</span>
+                        </button>
+                        <button id="btn-send-stock-hub" onclick="sendStockDrawToStockHub()" class="bg-sky-600 hover:bg-sky-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-sky-600/20 transition-all" title="Deduct consolidated timber stock draw directly in $tock Hub">
+                            <i class="fa-solid fa-cloud-arrow-up"></i>
+                            <span>Send to $tock Hub</span>
                         </button>
                         <button onclick="printVisualCutList()" class="bg-amber-600 hover:bg-amber-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-amber-600/20" title="Print graphical board-by-board cutting diagrams">
                             <i class="fa-solid fa-image"></i>
@@ -882,6 +906,11 @@
         let materialsConfig = {}; // Map: materialName -> { stockLengths: [{length: 6000, active: true}, ...] }
         let optimizationResult = null;
         let currentFileName = "";
+        let stockDrawSent = false;
+        const STOCK_HUB_URL = "";
+        let stockHubTimberItems = [];
+        let stockHubConnected = false;
+        let stockHubStockPrices = {}; // Map: materialName -> { stockLengthMm: lmCostFromStockHub }
 
         // Default stock lengths for auto-discovered materials
         const DEFAULT_STOCK_LENGTHS = [6000, 5400, 3600, 1800];
@@ -1205,14 +1234,22 @@
             if (hasManualOverride(matName, sLen)) {
                 return Number(customStockPriceOverrides[matName][sLen]);
             }
-            if (timberStockPrices[matName] && timberStockPrices[matName][sLen] !== undefined) {
+            if (timberStockPrices[matName] && timberStockPrices[matName][sLen] !== undefined && Number(timberStockPrices[matName][sLen]) > 0) {
                 return Number(timberStockPrices[matName][sLen]);
             }
             const { tiers } = findPdfTiersForMaterial(selectedCostingGroup, matName);
             const { costLm } = resolveStockLengthPriceFromTiers(tiers, sLen);
-            if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
-            timberStockPrices[matName][sLen] = costLm;
-            return costLm;
+            if (costLm > 0) {
+                if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+                timberStockPrices[matName][sLen] = costLm;
+                return costLm;
+            }
+            if (stockHubStockPrices[matName] && stockHubStockPrices[matName][sLen] > 0) {
+                if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+                timberStockPrices[matName][sLen] = Number(stockHubStockPrices[matName][sLen]);
+                return Number(stockHubStockPrices[matName][sLen]);
+            }
+            return 0.00;
         }
 
         // Live preview handler while typing inside a stock-length rate input box
@@ -1328,9 +1365,10 @@
                     const boardCost = ((sLen / 1000.0) * rateLm).toFixed(2);
                     const isManual = hasManualOverride(matName, sLen);
                     const { matchedStockType } = resolveStockLengthPriceFromTiers(tiers, sLen);
+                    const hasHubPrice = Boolean(stockHubStockPrices[matName] && stockHubStockPrices[matName][sLen] > 0);
                     const tierHint = isManual
                         ? `<span class="text-amber-400 font-semibold">Custom (Saved)</span>`
-                        : (matchedStockType ? `Tier &le;${matchedStockType}mm` : 'Manual');
+                        : (matchedStockType ? `Tier &le;${matchedStockType}mm` : (hasHubPrice ? `<span class="text-sky-400 font-semibold">$tock Hub</span>` : 'Manual'));
                     const activeBorder = !sObj.active
                         ? 'border-slate-800/60 bg-slate-950/50 opacity-55'
                         : (isManual ? 'border-amber-500/50 bg-slate-900' : 'border-slate-700 bg-slate-900');
@@ -1817,8 +1855,13 @@
                 }
             });
 
-            applySelectedGroupPricesToMaterials();
-            renderMaterialsTable();
+            if (stockHubConnected && stockHubTimberItems.length > 0) {
+                applyStockHubToMaterialsConfig(true);
+            } else {
+                applySelectedGroupPricesToMaterials();
+                renderMaterialsTable();
+                syncStockFromStockHub(true);
+            }
         }
 
         // Render Materials Table (with Nominated Reuse Stock Length mm & Qty in Stock per material)
@@ -1846,12 +1889,18 @@
                 const reusedActive = Boolean(matCfg.reusedActive && reusedLen > 0);
                 const safeMat = matName.replace(/'/g, "\\'");
 
-                let stockBadgesHTML = stockConfig.map((s, idx) => `
-                    <label class="inline-flex items-center space-x-1.5 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-lg text-xs cursor-pointer hover:border-slate-700">
+                let stockBadgesHTML = stockConfig.map((s, idx) => {
+                    const hasHubQty = (s.stockHubQty !== undefined && s.stockHubQty !== null);
+                    const hubQtyNum = hasHubQty ? Number(s.stockHubQty) : 0;
+                    const qtyPill = hasHubQty
+                        ? `<span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold ${hubQtyNum > 0 ? 'bg-emerald-950 text-emerald-300 border border-emerald-500/30' : 'bg-red-950 text-red-300 border border-red-500/30'}" title="On-hand in $tock Hub (${s.stockHubCode || ''})">${hubQtyNum}</span>`
+                        : '';
+                    return `
+                    <label class="inline-flex items-center space-x-1.5 bg-slate-900 border ${hasHubQty && hubQtyNum <= 0 ? 'border-red-900/60 opacity-65' : 'border-slate-800'} px-3 py-1.5 rounded-lg text-xs cursor-pointer hover:border-slate-700">
                         <input type="checkbox" ${s.active ? 'checked' : ''} ${!isAdmin ? 'disabled' : ''} onchange="toggleStockLength('${safeMat}', ${idx})" class="rounded bg-slate-800 border-slate-700 text-red-600 focus:ring-0 ${!isAdmin ? 'opacity-60 cursor-not-allowed' : ''}">
-                        <span class="text-white font-medium">${s.length}mm</span>
-                    </label>
-                `).join(' ');
+                        <span class="text-white font-medium">${s.length}mm</span>${qtyPill}
+                    </label>`;
+                }).join(' ');
 
                 // If a non-standard Reuse Stock length is nominated, also show it as a badge with its available stock quantity
                 if (reusedLen > 0) {
@@ -1881,7 +1930,10 @@
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-slate-900/50 transition-colors";
                 tr.innerHTML = `
-                    <td class="py-4 px-6 font-semibold text-white">${matName} ${count === 0 ? '<span class="text-xs text-red-400 font-normal ml-2">(Custom Material)</span>' : ''}</td>
+                    <td class="py-4 px-6 font-semibold text-white">
+                        <div>${matName} ${count === 0 ? '<span class="text-xs text-red-400 font-normal ml-2">(Custom Material)</span>' : ''}</div>
+                        ${stockHubConnected ? (matCfg.stockHubMatched ? '<span class="inline-flex items-center space-x-1 mt-1 px-2 py-0.5 rounded bg-sky-950/80 border border-sky-500/30 text-sky-300 text-[10px] font-semibold"><i class="fa-solid fa-link"></i><span>$tock Hub Linked</span></span>' : '<span class="inline-flex items-center space-x-1 mt-1 px-2 py-0.5 rounded bg-amber-950/70 border border-amber-500/30 text-amber-300 text-[10px] font-semibold"><i class="fa-solid fa-triangle-exclamation"></i><span>Not in $tock Hub</span></span>') : ''}
+                    </td>
                     <td class="py-4 px-6 text-slate-300 font-medium">${count} members <span class="text-xs text-slate-500">(${uniqueCount} unique)</span></td>
                     <td class="py-4 px-6"><div class="flex flex-wrap gap-2 items-center">${stockBadgesHTML}</div></td>
                     <td class="py-4 px-6">${reuseBoxHTML}</td>
@@ -2161,6 +2213,8 @@
             const separateInPsf = separatePsfEl ? separatePsfEl.checked : true;
             const useReuseTimberEl = document.getElementById('opt-use-reuse-timber');
             const useReuseTimber = useReuseTimberEl ? useReuseTimberEl.checked : true;
+            const capStockHubEl = document.getElementById('opt-cap-stock-hub');
+            const capToStockHub = Boolean(capStockHubEl && capStockHubEl.checked && stockHubConnected);
 
             // Pre-optimization validation: check if any member length exceeds active stock lengths turned on (including nominated reuse length)
             let stockWarnings = [];
@@ -2230,12 +2284,23 @@
 
             // Track remaining available Reuse Stock boards per material across batches so we never exceed the nominated quantity in stock
             let remainingReuseBoardsByMat = {};
+            let remainingHubBoardsByMat = {};
+            let stockHubShortfalls = {};
+            let oversizedMembers = [];
             Object.keys(materialsConfig).forEach(mKey => {
                 const cfg = materialsConfig[mKey];
                 if (cfg && cfg.reusedActive && Number(cfg.reusedLength) > 0) {
                     remainingReuseBoardsByMat[mKey] = Math.max(1, parseInt(cfg.reusedQuantity, 10) || 1);
                 } else {
                     remainingReuseBoardsByMat[mKey] = 0;
+                }
+                if (capToStockHub && cfg && cfg.stockHubMatched) {
+                    remainingHubBoardsByMat[mKey] = {};
+                    (cfg.stockLengths || []).forEach(sObj => {
+                        if (sObj.active && sObj.stockHubQty !== undefined && sObj.stockHubQty !== null) {
+                            remainingHubBoardsByMat[mKey][Number(sObj.length)] = Math.max(0, Number(sObj.stockHubQty) || 0);
+                        }
+                    });
                 }
             });
 
@@ -2306,12 +2371,42 @@
                         return maxCand;
                     }
 
-                    // Helper: pack a pool of units into bins of stack height `binStackCount`
-                    function packUnitsIntoBins(unitsPool, binStackCount, useLikeMemberMode, allowedStocks = fallbackStocks, forceFixedStock = false) {
+                    const hubCapActiveForMat = Boolean(capToStockHub && remainingHubBoardsByMat[mat]);
+                    const remHubForMat = hubCapActiveForMat ? remainingHubBoardsByMat[mat] : null;
+
+                    function getAvailableFittingStockForBoards(usedLen, boardsNeeded, stockCandidates = fallbackStocks, useCap = false) {
+                        const filtered = useCap
+                            ? stockCandidates.filter(sLen => sLen >= usedLen && (remHubForMat[sLen] || 0) >= boardsNeeded)
+                            : stockCandidates.filter(sLen => sLen >= usedLen);
+                        if (filtered.length === 0) return null;
+                        return getOptimalFittingStock(usedLen, filtered);
+                    }
+
+                    function getUpgradeStockForBin(bin, newUsed, stockCandidates = fallbackStocks, useCap = false) {
+                        if (newUsed <= bin.stockLength) return bin.stockLength;
+                        if (!useCap || bin.isShortfall) {
+                            const maxCand = stockCandidates[0];
+                            if (newUsed > maxCand) return null;
+                            return getOptimalFittingStock(newUsed, stockCandidates);
+                        }
+                        return getAvailableFittingStockForBoards(newUsed, bin.stackCount, stockCandidates, true);
+                    }
+
+                    function applyStockUpgradeToBin(bin, targetStock, useCap = false) {
+                        if (useCap && !bin.isShortfall && targetStock !== bin.stockLength) {
+                            remHubForMat[bin.stockLength] = (remHubForMat[bin.stockLength] || 0) + bin.stackCount;
+                            remHubForMat[targetStock] = Math.max(0, (remHubForMat[targetStock] || 0) - bin.stackCount);
+                        }
+                        bin.stockLength = targetStock;
+                    }
+
+                    // Helper: pack a pool of units into bins of stack height `binStackCount` (honoring $tock Hub board caps when active)
+                    function packUnitsIntoBins(unitsPool, binStackCount, useLikeMemberMode, allowedStocks = fallbackStocks, forceFixedStock = false, overflowCollector = null) {
                         let localBins = [];
                         let lastPlacedBinIdx = -1;
                         let lastPlacedLikeKey = null;
                         const maxStockForPass = allowedStocks[0];
+                        const useCap = Boolean(hubCapActiveForMat && !forceFixedStock);
 
                         unitsPool.forEach(member => {
                             const needed = member.lengthNormalized + kerf + memberSpacing;
@@ -2319,14 +2414,16 @@
 
                             if (!forceFixedStock && isEconomicalMode && hasActivePricing) {
                                 let bestBinIdx = -1;
+                                let bestTargetStock = null;
                                 let minDeltaCost = Infinity;
                                 let minRemAfter = Infinity;
 
                                 localBins.forEach((bin, binIdx) => {
                                     const newUsed = bin.usedLength + needed;
                                     if (newUsed <= maxStockForPass) {
+                                        const targetStock = getUpgradeStockForBin(bin, newUsed, allowedStocks, useCap);
+                                        if (targetStock === null) return;
                                         const curCost = getSingleBoardDollarCost(bin.stockLength);
-                                        const targetStock = getOptimalFittingStock(newUsed, allowedStocks);
                                         const newCost = getSingleBoardDollarCost(targetStock);
                                         const deltaCost = newCost - curCost;
                                         const remAfter = targetStock - newUsed;
@@ -2338,11 +2435,13 @@
                                             minDeltaCost = deltaCost;
                                             minRemAfter = remAfter;
                                             bestBinIdx = binIdx;
+                                            bestTargetStock = targetStock;
                                         }
                                     }
                                 });
 
                                 let chosenBinIdx = bestBinIdx;
+                                let chosenTargetStock = bestTargetStock;
 
                                 if (useLikeMemberMode && member._likeKey === lastPlacedLikeKey && lastPlacedBinIdx !== -1 && bestBinIdx !== -1) {
                                     const checkCandidates = [lastPlacedBinIdx, lastPlacedBinIdx + 1];
@@ -2351,12 +2450,14 @@
                                         if (candBinIdx < localBins.length) {
                                             const candNewUsed = localBins[candBinIdx].usedLength + needed;
                                             if (candNewUsed <= maxStockForPass) {
+                                                const candStock = getUpgradeStockForBin(localBins[candBinIdx], candNewUsed, allowedStocks, useCap);
+                                                if (candStock === null) continue;
                                                 const curCost = getSingleBoardDollarCost(localBins[candBinIdx].stockLength);
-                                                const candStock = getOptimalFittingStock(candNewUsed, allowedStocks);
                                                 const candDelta = getSingleBoardDollarCost(candStock) - curCost;
                                                 const candRem = candStock - candNewUsed;
                                                 if (Math.abs(candDelta - minDeltaCost) <= 1e-6 && candRem <= minRemAfter + 50) {
                                                     chosenBinIdx = candBinIdx;
+                                                    chosenTargetStock = candStock;
                                                     break;
                                                 }
                                             }
@@ -2367,7 +2468,7 @@
                                 if (chosenBinIdx !== -1) {
                                     localBins[chosenBinIdx].cuts.push(member);
                                     localBins[chosenBinIdx].usedLength += needed;
-                                    localBins[chosenBinIdx].stockLength = forceFixedStock ? maxStockForPass : getOptimalFittingStock(localBins[chosenBinIdx].usedLength, allowedStocks);
+                                    applyStockUpgradeToBin(localBins[chosenBinIdx], chosenTargetStock, useCap);
                                     localBins[chosenBinIdx].remnant = localBins[chosenBinIdx].stockLength - localBins[chosenBinIdx].usedLength;
                                     lastPlacedBinIdx = chosenBinIdx;
                                     lastPlacedLikeKey = member._likeKey;
@@ -2375,20 +2476,24 @@
                                 }
                             } else if (forceFixedStock || useLikeMemberMode || strategy === 'bfd') {
                                 let bestBfdIdx = -1;
+                                let bestTargetStock = null;
                                 let minRemainingAfter = Infinity;
                                 localBins.forEach((bin, binIdx) => {
                                     const newUsed = bin.usedLength + needed;
                                     if (newUsed <= maxStockForPass) {
-                                        const targetStock = forceFixedStock ? maxStockForPass : getOptimalFittingStock(newUsed, allowedStocks);
+                                        const targetStock = forceFixedStock ? maxStockForPass : getUpgradeStockForBin(bin, newUsed, allowedStocks, useCap);
+                                        if (targetStock === null) return;
                                         const remAfter = targetStock - newUsed;
                                         if (remAfter < minRemainingAfter) {
                                             minRemainingAfter = remAfter;
                                             bestBfdIdx = binIdx;
+                                            bestTargetStock = targetStock;
                                         }
                                     }
                                 });
 
                                 let chosenBinIdx = bestBfdIdx;
+                                let chosenTargetStock = bestTargetStock;
 
                                 if (useLikeMemberMode && member._likeKey === lastPlacedLikeKey && lastPlacedBinIdx !== -1 && bestBfdIdx !== -1) {
                                     const checkCandidates = [lastPlacedBinIdx, lastPlacedBinIdx + 1];
@@ -2397,10 +2502,12 @@
                                         if (candBinIdx < localBins.length) {
                                             const candNewUsed = localBins[candBinIdx].usedLength + needed;
                                             if (candNewUsed <= maxStockForPass) {
-                                                const candStock = forceFixedStock ? maxStockForPass : getOptimalFittingStock(candNewUsed, allowedStocks);
+                                                const candStock = forceFixedStock ? maxStockForPass : getUpgradeStockForBin(localBins[candBinIdx], candNewUsed, allowedStocks, useCap);
+                                                if (candStock === null) continue;
                                                 const candRem = candStock - candNewUsed;
                                                 if (candRem <= minRemainingAfter + 50) {
                                                     chosenBinIdx = candBinIdx;
+                                                    chosenTargetStock = candStock;
                                                     break;
                                                 }
                                             }
@@ -2411,7 +2518,7 @@
                                 if (chosenBinIdx !== -1) {
                                     localBins[chosenBinIdx].cuts.push(member);
                                     localBins[chosenBinIdx].usedLength += needed;
-                                    localBins[chosenBinIdx].stockLength = forceFixedStock ? maxStockForPass : getOptimalFittingStock(localBins[chosenBinIdx].usedLength, allowedStocks);
+                                    if (!forceFixedStock) applyStockUpgradeToBin(localBins[chosenBinIdx], chosenTargetStock, useCap);
                                     localBins[chosenBinIdx].remnant = localBins[chosenBinIdx].stockLength - localBins[chosenBinIdx].usedLength;
                                     lastPlacedBinIdx = chosenBinIdx;
                                     lastPlacedLikeKey = member._likeKey;
@@ -2421,9 +2528,11 @@
                                 for (let i = 0; i < localBins.length; i++) {
                                     const newUsed = localBins[i].usedLength + needed;
                                     if (newUsed <= maxStockForPass) {
+                                        const targetStock = forceFixedStock ? maxStockForPass : getUpgradeStockForBin(localBins[i], newUsed, allowedStocks, useCap);
+                                        if (targetStock === null) continue;
                                         localBins[i].cuts.push(member);
                                         localBins[i].usedLength = newUsed;
-                                        localBins[i].stockLength = forceFixedStock ? maxStockForPass : getOptimalFittingStock(newUsed, allowedStocks);
+                                        if (!forceFixedStock) applyStockUpgradeToBin(localBins[i], targetStock, useCap);
                                         localBins[i].remnant = localBins[i].stockLength - newUsed;
                                         placed = true;
                                         break;
@@ -2433,7 +2542,52 @@
 
                             if (!placed) {
                                 const initUsed = member.lengthNormalized + memberSpacing;
-                                const chosenStock = forceFixedStock ? maxStockForPass : getOptimalFittingStock(initUsed, allowedStocks);
+                                // Hard guard: NEVER place a member onto a board shorter than the member itself
+                                if (initUsed > maxStockForPass) {
+                                    if (forceFixedStock && Array.isArray(overflowCollector)) {
+                                        overflowCollector.push(member);
+                                        return;
+                                    }
+                                    oversizedMembers.push({
+                                        material: mat,
+                                        label: member.label || member.member || member.ID || 'Member',
+                                        truss: member.truss || '',
+                                        length: Math.round(member.lengthNormalized),
+                                        requiredLength: Math.round(initUsed),
+                                        maxStock: maxStockForPass,
+                                        qty: binStackCount
+                                    });
+                                    return;
+                                }
+
+                                let chosenStock = forceFixedStock ? maxStockForPass : getAvailableFittingStockForBoards(initUsed, binStackCount, allowedStocks, useCap);
+                                let isShortfall = false;
+
+                                if (chosenStock === null) {
+                                    if (binStackCount > 1 && Array.isArray(overflowCollector)) {
+                                        overflowCollector.push(member);
+                                        return;
+                                    }
+                                    // Stock exhausted in $tock Hub -> still place on optimal fitting length so no member is lost, and flag shortfall
+                                    chosenStock = getOptimalFittingStock(initUsed, allowedStocks);
+                                    if (chosenStock < initUsed) {
+                                        oversizedMembers.push({
+                                            material: mat,
+                                            label: member.label || member.member || member.ID || 'Member',
+                                            truss: member.truss || '',
+                                            length: Math.round(member.lengthNormalized),
+                                            requiredLength: Math.round(initUsed),
+                                            maxStock: chosenStock,
+                                            qty: binStackCount
+                                        });
+                                        return;
+                                    }
+                                    isShortfall = true;
+                                    if (!stockHubShortfalls[mat]) stockHubShortfalls[mat] = {};
+                                    stockHubShortfalls[mat][chosenStock] = (stockHubShortfalls[mat][chosenStock] || 0) + binStackCount;
+                                } else if (useCap) {
+                                    remHubForMat[chosenStock] = Math.max(0, (remHubForMat[chosenStock] || 0) - binStackCount);
+                                }
 
                                 localBins.push({
                                     stackCount: binStackCount,
@@ -2441,7 +2595,8 @@
                                     usedLength: initUsed,
                                     cuts: [member],
                                     remnant: chosenStock - initUsed,
-                                    isReuseBoard: forceFixedStock
+                                    isReuseBoard: forceFixedStock,
+                                    isShortfall: isShortfall
                                 });
                                 lastPlacedBinIdx = localBins.length - 1;
                                 lastPlacedLikeKey = member._likeKey;
@@ -2644,7 +2799,14 @@
                             pairsPool.sort(sortFn);
                             singlesPool.sort(sortFn);
 
-                            let pairBins = packUnitsIntoBins(pairsPool, 2, true, passStocks, forceFixedStock);
+                            let overflowPairs = [];
+                            let pairBins = packUnitsIntoBins(pairsPool, 2, true, passStocks, forceFixedStock, overflowPairs);
+
+                            // Any 2-high pairs that couldn't find 2 identical boards left in $tock Hub split into singles
+                            overflowPairs.forEach(up => {
+                                singlesPool.push({ ...up, _stackQty: 1, _pieceEnd: up._pieceNumber });
+                                singlesPool.push({ ...up, _stackQty: 1, _pieceNumber: up._pieceNumber + 1, _pieceEnd: up._pieceNumber + 1 });
+                            });
 
                             let keptPairBins = [];
                             let availSingleLengths = singlesPool.map(s => s.lengthNormalized);
@@ -2668,6 +2830,10 @@
                                     const matchSingleIdx = availSingleLengths.findIndex(sL => (L + kerf + 2 * memberSpacing + sL) <= passMaxStock);
 
                                     if (canFitTwoEndToEnd || matchSingleIdx !== -1) {
+                                        // Return the 2 boards back to $tock Hub remaining pool before repacking as singles
+                                        if (hubCapActiveForMat && !forceFixedStock && !pb.isShortfall) {
+                                            remHubForMat[pb.stockLength] = (remHubForMat[pb.stockLength] || 0) + (pb.stackCount || 2);
+                                        }
                                         singlesPool.push({
                                             ...c,
                                             _stackQty: 1,
@@ -2967,9 +3133,13 @@
                 totalCutM: (totalCutLengthAll / 1000).toFixed(2),
                 totalReusableM: (totalReusableStockAll / 1000).toFixed(2),
                 overallWastePct: (totalStockLengthAll - totalReusableStockAll) > 0 ? (((totalStockLengthAll - totalCutLengthAll - totalReusableStockAll) / (totalStockLengthAll - totalReusableStockAll)) * 100).toFixed(2) : 0,
-                separateInPsf: separateInPsf
+                separateInPsf: separateInPsf,
+                stockHubShortfalls: stockHubShortfalls,
+                oversizedMembers: oversizedMembers
             };
 
+            stockDrawSent = false;
+            updateSendStockHubButtonState();
             renderOptimizationResultsUI();
             if (strategy === 'economical_stack_2') {
                 const costStr = '$' + (optimizationResult.totalTimberCost || 0).toFixed(2);
@@ -3019,6 +3189,43 @@
                     <span class="text-xl font-bold text-emerald-400">${totalCostFormatted}</span>
                 </div>
             `;
+            const osBanner = document.getElementById('opt-oversized-banner');
+            if (osBanner) {
+                const osList = optimizationResult.oversizedMembers || [];
+                if (osList.length > 0) {
+                    const groupedOs = {};
+                    osList.forEach(item => {
+                        const k = `${item.material}||${item.label}||${item.length}||${item.maxStock}`;
+                        if (!groupedOs[k]) groupedOs[k] = { ...item, totalQty: 0 };
+                        groupedOs[k].totalQty += (item.qty || 1);
+                    });
+                    const osLines = Object.values(groupedOs).map(g =>
+                        `<strong>${g.totalQty}x</strong> ${g.label} (<strong>${g.length}mm</strong>) on <strong>${g.material}</strong> &mdash; exceeds max active stock (${g.maxStock}mm)`
+                    );
+                    osBanner.innerHTML = `<div class="font-bold text-red-300 flex items-center space-x-2"><i class="fa-solid fa-ban"></i><span>Oversized Members Excluded (Exceed Max Active Stock Length &mdash; Enable Longer Stock &amp; Re-Optimize):</span></div><div class="pl-5">${osLines.join('<br>')}</div>`;
+                    osBanner.classList.remove('hidden');
+                } else {
+                    osBanner.classList.add('hidden');
+                    osBanner.innerHTML = '';
+                }
+            }
+            const sfBanner = document.getElementById('opt-shortfall-banner');
+            if (sfBanner) {
+                const sfObj = optimizationResult.stockHubShortfalls || {};
+                const sfLines = [];
+                Object.keys(sfObj).forEach(m => {
+                    Object.keys(sfObj[m]).forEach(len => {
+                        sfLines.push(`<strong>${sfObj[m][len]}x</strong> ${m} @ ${len}mm`);
+                    });
+                });
+                if (sfLines.length > 0) {
+                    sfBanner.innerHTML = `<div class="font-bold text-red-300 flex items-center space-x-2"><i class="fa-solid fa-triangle-exclamation"></i><span>$tock Hub Stock Shortfall Detected (exceeds on-hand inventory):</span></div><div class="pl-5">${sfLines.join(' &bull; ')}</div>`;
+                    sfBanner.classList.remove('hidden');
+                } else {
+                    sfBanner.classList.add('hidden');
+                    sfBanner.innerHTML = '';
+                }
+            }
             document.getElementById('optimization-results-summary').classList.remove('hidden');
 
             const summaryBody = document.getElementById('summary-table-body');
@@ -3177,7 +3384,7 @@
                 }
 
                 loadedZip.file("members.json", JSON.stringify(exportData, null, 2));
-                const content = await loadedZip.generateAsync({ type: "blob" });
+                const content = await loadedZip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
                 
                 const downloadUrl = URL.createObjectURL(content);
                 const a = document.createElement('a');
@@ -3507,6 +3714,8 @@
                 materialsConfig = {};
                 optimizationResult = null;
                 currentFileName = "";
+                stockDrawSent = false;
+                updateSendStockHubButtonState();
 
                 document.getElementById('loaded-filename').textContent = "No file loaded";
                 document.getElementById('file-status-badge').classList.add('hidden');
@@ -3870,6 +4079,257 @@
             printWindow.document.close();
             printWindow.focus();
         }
+
+
+        function updateSendStockHubButtonState() {
+            const btn = document.getElementById('btn-send-stock-hub');
+            if (!btn) return;
+            if (stockDrawSent) {
+                btn.className = "bg-emerald-700 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-emerald-700/20 opacity-90 cursor-default";
+                btn.innerHTML = '<i class="fa-solid fa-circle-check"></i><span>Sent to $tock Hub</span>';
+            } else {
+                btn.className = "bg-sky-600 hover:bg-sky-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-sky-600/20 transition-all";
+                btn.innerHTML = '<i class="fa-solid fa-cloud-arrow-up"></i><span>Send to $tock Hub</span>';
+            }
+        }
+
+        async function sendStockDrawToStockHub() {
+            if (!optimizationResult || !optimizationResult.boards || optimizationResult.boards.length === 0) {
+                showToast("Please run the optimizer first before sending stock draw.", "error");
+                return;
+            }
+            if (stockDrawSent) {
+                if (!confirm("This job's Stock Draw has already been sent to $tock Hub. Send it again?")) {
+                    return;
+                }
+            }
+
+            // Consolidate board counts by (material + stockLength)
+            const drawMap = {};
+            optimizationResult.boards.forEach(b => {
+                const sCount = b.stackCount || 1;
+                const key = `${b.material}||${b.stockLength}`;
+                if (!drawMap[key]) {
+                    drawMap[key] = {
+                        product_code: b.material,
+                        stock_length: Number(b.stockLength),
+                        quantity: 0
+                    };
+                }
+                drawMap[key].quantity += sCount;
+            });
+
+            const items = Object.values(drawMap);
+            const jobLabel = currentFileName ? currentFileName.replace(/\.[^/.]+$/, "") : "Manual Run";
+            const previewLines = items.map(it => `• ${it.quantity}x ${it.product_code} @ ${it.stock_length}mm`).join("\n");
+
+            if (!confirm(`Deduct ${items.length} timber line(s) for job "${jobLabel}" from $tock Hub?\n\n${previewLines}`)) {
+                return;
+            }
+
+            const btn = document.getElementById('btn-send-stock-hub');
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i><span>Sending...</span>';
+            }
+
+            let successCount = 0;
+            let errors = [];
+            const operatorName = (currentUser && currentUser.username) ? currentUser.username : "PBA Optimizer";
+
+            for (const item of items) {
+                try {
+                    const res = await fetch(`${STOCK_HUB_URL}/api/deduct`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            item_type: "TIMBER",
+                            product_code: item.product_code,
+                            stock_length: item.stock_length,
+                            quantity: item.quantity,
+                            username: operatorName,
+                            notes: `PBA Optimizer Stock Draw (${jobLabel})`
+                        })
+                    });
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok || data.status === "error" || data.error) {
+                        errors.push(`${item.product_code} @ ${item.stock_length}mm: ${data.error || data.message || res.statusText}`);
+                    } else {
+                        successCount++;
+                    }
+                } catch (err) {
+                    errors.push(`${item.product_code} @ ${item.stock_length}mm: ${err.message}`);
+                }
+            }
+
+            if (btn) btn.disabled = false;
+
+            if (errors.length === 0) {
+                stockDrawSent = true;
+                updateSendStockHubButtonState();
+                showToast(`Deducted all ${successCount} timber line(s) in $tock Hub for ${jobLabel}!`);
+                syncStockFromStockHub(true);
+            } else {
+                updateSendStockHubButtonState();
+                console.error("Stock Hub deduction errors:", errors);
+                alert(`Deducted ${successCount}/${items.length} line(s). Unmatched / failed lines:\n\n• ` + errors.join("\n• "));
+                showToast(`Deducted ${successCount}/${items.length} lines. ${errors.length} failed.`, "error");
+            }
+        }
+
+
+        // =========================================================
+        // LIVE $tock Hub TIMBER STOCK & LM COST SYNC (OPTION 1)
+        // =========================================================
+        function updateStockHubSyncBadge(connected, skuCount) {
+            const badge = document.getElementById('stockhub-sync-badge');
+            const icon = document.getElementById('stockhub-sync-icon');
+            const txt = document.getElementById('stockhub-sync-text');
+            if (!badge || !icon || !txt) return;
+            if (connected) {
+                badge.className = "flex items-center space-x-2 bg-sky-950/80 border border-sky-500/40 text-sky-300 px-3 py-2 rounded-xl text-xs font-semibold";
+                icon.className = "fa-solid fa-circle-check text-emerald-400";
+                txt.textContent = `$tock Hub: ${skuCount} Timber SKUs Synced`;
+            } else {
+                badge.className = "flex items-center space-x-2 bg-slate-900 border border-slate-700 text-slate-400 px-3 py-2 rounded-xl text-xs font-semibold";
+                icon.className = "fa-solid fa-circle-minus text-slate-500";
+                txt.textContent = "$tock Hub: Offline (Manual Stock)";
+            }
+        }
+
+        function matchStockHubTimberForMaterial(matName) {
+            if (!stockHubTimberItems || stockHubTimberItems.length === 0) return [];
+            const clean = String(matName || '').trim().replace(/\s+/g, ' ');
+            if (!clean) return [];
+            const up = clean.toUpperCase();
+
+            // 1. Exact product_code match
+            const exact = stockHubTimberItems.filter(r => String(r.product_code || '').trim().toUpperCase() === up);
+            if (exact.length > 0) return exact.slice().sort((a, b) => Number(b.stock_length) - Number(a.stock_length));
+
+            // 2. Alternative code (alt_codes) match
+            const aliasMatches = stockHubTimberItems.filter(r => {
+                const rawAlts = String(r.alt_codes || '').trim();
+                if (!rawAlts) return false;
+                return rawAlts.split(/[,;|\r\n]+/).some(a => a.trim().toUpperCase() === up);
+            });
+            if (aliasMatches.length > 0) return aliasMatches.slice().sort((a, b) => Number(b.stock_length) - Number(a.stock_length));
+
+            // 3. Structured attribute match (e.g. "90x35 MGP10H2F" -> depth=90, thickness=35, grade="MGP10", treatment="H2F ...")
+            const dimMatch = clean.match(/^(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s+(.+)$/i);
+            if (!dimMatch) return [];
+            const reqD = parseFloat(dimMatch[1]);
+            const reqT = parseFloat(dimMatch[2]);
+            const reqGradeTok = dimMatch[3].replace(/\s+/g, '').toUpperCase();
+
+            const attrMatches = stockHubTimberItems.filter(r => {
+                const rD = parseFloat(r.depth) || 0;
+                const rT = parseFloat(r.thickness) || 0;
+                const dimsOk = (Math.abs(rD - reqD) < 0.5 && Math.abs(rT - reqT) < 0.5) ||
+                               (Math.abs(rD - reqT) < 0.5 && Math.abs(rT - reqD) < 0.5);
+                if (!dimsOk) return false;
+                const rGrade = String(r.grade || '').replace(/\s+/g, '').toUpperCase();
+                let rTreatFirst = (String(r.treatment || '').trim().split(/\s+/)[0] || '').toUpperCase();
+                if (rTreatFirst === 'UNTREATED' || rTreatFirst === 'NONE' || rTreatFirst === 'NIL') rTreatFirst = '';
+                const rCombined = rGrade + rTreatFirst;
+                return (reqGradeTok === rCombined || reqGradeTok === rGrade);
+            });
+            return attrMatches.sort((a, b) => Number(b.stock_length) - Number(a.stock_length));
+        }
+
+        function applyStockHubToMaterialsConfig(silent = false) {
+            if (!stockHubConnected || !stockHubTimberItems.length) return 0;
+            let matchedMatCount = 0;
+
+            Object.keys(materialsConfig).forEach(matName => {
+                const rows = matchStockHubTimberForMaterial(matName);
+                if (rows.length > 0) {
+                    matchedMatCount++;
+                    // Consolidate by stock_length
+                    const byLen = {};
+                    rows.forEach(r => {
+                        const sLen = Math.round(Number(r.stock_length) || 0);
+                        if (sLen <= 0) return;
+                        const qty = Number(r.total_quantity) || 0;
+                        const lmCost = Number(r.lm_cost) || 0;
+                        if (!byLen[sLen]) {
+                            byLen[sLen] = {
+                                length: sLen,
+                                stockHubQty: qty,
+                                stockHubCode: r.product_code || '',
+                                stockHubLmCost: lmCost
+                            };
+                        } else {
+                            byLen[sLen].stockHubQty += qty;
+                            if (lmCost > 0 && byLen[sLen].stockHubLmCost <= 0) {
+                                byLen[sLen].stockHubLmCost = lmCost;
+                            }
+                        }
+                    });
+
+                    const sortedLens = Object.keys(byLen).map(Number).sort((a, b) => b - a);
+                    materialsConfig[matName].stockLengths = sortedLens.map(sLen => ({
+                        length: sLen,
+                        active: byLen[sLen].stockHubQty > 0,
+                        stockHubQty: byLen[sLen].stockHubQty,
+                        stockHubCode: byLen[sLen].stockHubCode,
+                        stockHubLmCost: byLen[sLen].stockHubLmCost
+                    }));
+                    materialsConfig[matName].stockHubMatched = true;
+
+                    // Sync live lm_cost into stockHubStockPrices (honoring manual overrides)
+                    if (!stockHubStockPrices[matName]) stockHubStockPrices[matName] = {};
+                    if (!timberStockPrices[matName]) timberStockPrices[matName] = {};
+                    sortedLens.forEach(sLen => {
+                        const hubCost = byLen[sLen].stockHubLmCost;
+                        if (hubCost > 0) {
+                            stockHubStockPrices[matName][sLen] = hubCost;
+                            if (!hasManualOverride(matName, sLen)) {
+                                timberStockPrices[matName][sLen] = hubCost;
+                            }
+                        }
+                    });
+                } else {
+                    materialsConfig[matName].stockHubMatched = false;
+                }
+            });
+
+            applySelectedGroupPricesToMaterials(false);
+            renderMaterialsTable();
+            initCostingTable();
+            if (!silent && Object.keys(materialsConfig).length > 0) {
+                showToast(`Synced live stock & LM costs from $tock Hub (${matchedMatCount}/${Object.keys(materialsConfig).length} job materials matched).`);
+            }
+            return matchedMatCount;
+        }
+
+        async function syncStockFromStockHub(silent = false) {
+            try {
+                const res = await fetch(`${STOCK_HUB_URL}/api/timber/stock`, { cache: "no-store" });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (!Array.isArray(data)) throw new Error("Unexpected response format");
+                stockHubTimberItems = data;
+                stockHubConnected = true;
+                updateStockHubSyncBadge(true, data.length);
+                if (Object.keys(materialsConfig).length > 0) {
+                    applyStockHubToMaterialsConfig(silent);
+                } else if (!silent) {
+                    showToast(`Connected to $tock Hub (${data.length} timber SKUs loaded). Upload a .PSF to match.`);
+                }
+            } catch (err) {
+                stockHubConnected = false;
+                updateStockHubSyncBadge(false, 0);
+                if (!silent) {
+                    showToast("Could not reach $tock Hub (/api/timber/stock). Open via http://localhost:5000/optimizer.", "error");
+                }
+            }
+        }
+
+        // Auto-connect to $tock Hub on page load
+        window.addEventListener('DOMContentLoaded', () => {
+            syncStockFromStockHub(true);
+        });
 
 </script>
 </body>
