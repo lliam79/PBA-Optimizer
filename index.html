@@ -279,18 +279,23 @@
                         <div class="space-y-2 flex flex-col justify-between h-full">
                             <div>
                                 <label class="text-xs font-semibold text-slate-300 uppercase tracking-wider block mb-2">Optimization Strategy</label>
-                                <select id="opt-strategy" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
+                                <select id="opt-strategy" onchange="onStrategyChange()" class="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-white focus:outline-none focus:border-red-600">
                                     <option value="economical_stack_2" selected>Economical Cost + 2-Board Stack (Lowest $ Cost)</option>
                                     <option value="stack_2">2-Board Stack Cutting (Stack 2 High - Min Waste)</option>
                                     <option value="economical_single">Economical Cost Single-Board (Lowest $ Cost)</option>
+                                    <option value="wall_frame_hybrid">Wall Frame Hybrid (Closest Stock for Studs + Nest Remainder)</option>
+                                    <option value="strict_closest_stock">Strict Closest Stock (1 Piece Per Closest Board, e.g. Studs)</option>
                                     <option value="like_member">Like-Member Continuity (BFD + Consecutive)</option>
                                     <option value="bfd">Best Fit Decreasing (BFD)</option>
-                                    <option value="ffd">First Fit Decreasing (FFD)</option>
                                     <option value="largest">Longest First (Descending)</option>
                                     <option value="longest_stock">Longest Stock First (LSF)</option>
                                 </select>
+                                <div id="opt-stud-threshold-wrap" class="hidden mt-2 bg-slate-900/90 border border-amber-500/40 rounded-xl p-2.5">
+                                    <label class="text-[11px] font-semibold text-amber-300 uppercase tracking-wider block mb-1">Closest-Stock Max Offcut (mm)</label>
+                                    <input type="number" id="opt-stud-max-offcut" value="200" min="0" max="1500" step="10" onchange="if(optimizationResult) runOptimization()" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500">
+                                </div>
                             </div>
-                            <p class="text-xs text-slate-400 mt-2">Prioritizes like member labels on consecutive boards.</p>
+                            <p id="opt-strategy-hint" class="text-xs text-slate-400 mt-2">Prioritizes like member labels on consecutive boards.</p>
                         </div>
                         <div class="space-y-2 flex flex-col justify-between h-full">
                             <div>
@@ -406,11 +411,20 @@
                         <h2 class="text-2xl font-bold text-white">Cutting Schedule & Export</h2>
                         <p class="text-sm text-slate-400 mt-1">Review the total material summary, reusable stock returns, board cutting sequences, and export files.</p>
                     </div>
-                    <div class="flex items-center space-x-3">
-                        <button onclick="exportPSFFile()" class="bg-slate-800 hover:bg-slate-700 text-white font-semibold px-4 py-2.5 rounded-xl text-sm border border-slate-700 flex items-center space-x-2 shadow-sm">
-                            <i class="fa-solid fa-file-zipper text-red-500"></i>
-                            <span>Download Optimized .PSF</span>
-                        </button>
+                    <div class="flex items-center flex-wrap gap-2.5">
+                        <div class="inline-flex items-center bg-slate-950 border border-slate-700 rounded-xl p-1 shadow-sm">
+                            <button id="btn-export-psf" onclick="exportPSFFile()" class="bg-slate-800 hover:bg-slate-700 text-white font-semibold px-3.5 py-2 rounded-lg text-sm flex items-center space-x-2 transition-all">
+                                <i class="fa-solid fa-file-zipper text-red-500"></i>
+                                <span id="btn-export-psf-label">Download Optimized .PSF</span>
+                            </button>
+                            <button id="btn-psf-target-folder" onclick="selectPsfExportFolder()" class="text-slate-300 hover:text-white hover:bg-slate-800 px-3 py-2 rounded-lg text-xs font-semibold flex items-center space-x-1.5 ml-1 transition-all" title="Nominate a target folder to save optimized .PSF files directly instead of default Downloads">
+                                <i class="fa-solid fa-folder-open text-amber-400"></i>
+                                <span id="psf-folder-label">Set PSF Folder</span>
+                            </button>
+                            <button id="btn-psf-clear-folder" onclick="clearPsfExportFolder()" class="hidden text-slate-400 hover:text-red-400 px-2 py-2 rounded-lg text-xs transition-all" title="Clear nominated folder (revert to default Downloads)">
+                                <i class="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
                         <button onclick="exportExcelSchedule()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-2.5 rounded-xl text-sm flex items-center space-x-2 shadow-lg shadow-emerald-600/20">
                             <i class="fa-solid fa-file-excel"></i>
                             <span>Download Excel Schedule (.xlsx)</span>
@@ -530,9 +544,9 @@
                             <i class="fa-solid fa-floppy-disk"></i>
                             <span>Save Costing</span>
                         </button>
-                        <button onclick="resetCostingToBlank()" class="bg-slate-800 hover:bg-red-950/80 hover:border-red-500/50 text-slate-200 hover:text-red-300 font-semibold px-4 py-2.5 rounded-xl text-xs border border-slate-700 transition-all flex items-center space-x-1.5" title="Clear all costing data and reset to $0.00 for privacy before distributing">
-                            <i class="fa-solid fa-eraser text-red-400"></i>
-                            <span>Reset Costing to Blank</span>
+                        <button onclick="resetCostingToBlank()" class="bg-slate-800 hover:bg-red-950/80 hover:border-red-500/50 text-slate-200 hover:text-red-300 font-semibold px-4 py-2.5 rounded-xl text-xs border border-slate-700 transition-all flex items-center space-x-1.5" title="Reset costing: imports live $tock Hub pricing if connected, otherwise resets all timber rates to $0.00/m">
+                            <i class="fa-solid fa-rotate-left text-amber-400"></i>
+                            <span>Reset Costing</span>
                         </button>
                         <button onclick="calculateTimberCosts()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2.5 rounded-xl text-xs transition-all shadow-lg shadow-emerald-600/20 flex items-center space-x-1.5">
                             <i class="fa-solid fa-calculator"></i>
@@ -906,6 +920,7 @@
         let materialsConfig = {}; // Map: materialName -> { stockLengths: [{length: 6000, active: true}, ...] }
         let optimizationResult = null;
         let currentFileName = "";
+        let customStockHubOrderNumber = "";
         let stockDrawSent = false;
         const STOCK_HUB_URL = "";
         let stockHubTimberItems = [];
@@ -1049,8 +1064,11 @@
             }
         }
 
-        function resetCostingToBlank() {
-            if (!confirm("Are you sure you want to reset all timber costing data to blank ($0.00)? This removes saved PDF prices and manual rates from browser storage for privacy.")) {
+        async function resetCostingToBlank() {
+            const promptMsg = stockHubConnected
+                ? "Reset timber costing? This will clear manual overrides & PDF rates and import live $tock Hub pricing."
+                : "Reset timber costing? This will clear manual overrides & PDF rates, import live $tock Hub pricing if available, or reset all timber rates to $0.00/m.";
+            if (!confirm(promptMsg)) {
                 return;
             }
             localStorage.removeItem(COSTING_STORAGE_KEY);
@@ -1070,6 +1088,9 @@
                     timberStockPrices[matName][Number(sObj.length)] = 0.00;
                 });
             });
+
+            // 1. Attempt to import live $tock Hub pricing
+            await syncStockFromStockHub(true);
 
             updateCostingStatusBadge();
             initCostingTable();
@@ -1093,7 +1114,11 @@
                 if (elLm) elLm.textContent = '$0.00 / lm';
             }
 
-            showToast("All timber costing data reset to blank ($0.00) and cleared from browser storage.");
+            if (stockHubConnected) {
+                showToast("Costing reset — imported live $tock Hub pricing.");
+            } else {
+                showToast("$tock Hub not connected — timber costing reset to $0.00/m.");
+            }
         }
 
         // Helper: Strictly match .PSF material (e.g. "90x35 MGP10", "90x35 MGP10H2", "90x35 MGP10H2F", "90x35 MGP10H3")
@@ -1685,9 +1710,11 @@
         function switchTab(tabId) {
             syncCostingInputsFromDOM();
             if (tabId === 'costing') {
-                applySelectedGroupPricesToMaterials(false);
-                initCostingTable();
-                if (optimizationResult) calculateTimberCosts(true);
+                syncStockFromStockHub(true).then(() => {
+                    applySelectedGroupPricesToMaterials(false);
+                    initCostingTable();
+                    if (optimizationResult) calculateTimberCosts(true);
+                });
             }
             ['upload', 'materials', 'optimizer', 'schedule', 'costing', 'users'].forEach(t => {
                 const tabEl = document.getElementById(`tab-${t}`);
@@ -1744,6 +1771,7 @@
         // Handle PSF File upload & parsing via JSZip
         async function handlePsfFile(file) {
             currentFileName = file.name;
+            customStockHubOrderNumber = "";
             try {
                 const zip = new JSZip();
                 const contents = await zip.loadAsync(file);
@@ -1780,6 +1808,7 @@
         // Load Sample Data function for testing without external files
         function loadSampleData() {
             currentFileName = "sample_truss_project.psf";
+            customStockHubOrderNumber = "";
             layoutJsonData = { version: "1.0", units: "mm", data: "sample_layout_coordinates" };
             
             // Generate realistic sample timber members
@@ -1963,14 +1992,14 @@
                 materialsConfig[matName].reusedActive = true;
                 applySelectedGroupPricesToMaterials(false);
                 renderMaterialsTable();
-                if (optimizationResult) runOptimization();
+                if (optimizationResult) scheduleOptimizationRun();
                 showToast(`Nominated ${materialsConfig[matName].reusedQuantity}x ${parsed}mm reuse stock for '${matName}'!`);
             } else {
                 materialsConfig[matName].reusedLength = 0;
                 materialsConfig[matName].reusedQuantity = 1;
                 materialsConfig[matName].reusedActive = false;
                 renderMaterialsTable();
-                if (optimizationResult) runOptimization();
+                if (optimizationResult) scheduleOptimizationRun();
                 showToast(`Cleared reuse stock length for '${matName}'.`);
             }
         }
@@ -1982,7 +2011,7 @@
             materialsConfig[matName].reusedQuantity = validQty;
             renderMaterialsTable();
             if (optimizationResult && materialsConfig[matName].reusedActive && Number(materialsConfig[matName].reusedLength) > 0) {
-                runOptimization();
+                scheduleOptimizationRun();
             }
             if (Number(materialsConfig[matName].reusedLength) > 0) {
                 showToast(`Set '${matName}' reuse stock limit to ${validQty} board(s) of ${materialsConfig[matName].reusedLength}mm.`);
@@ -1999,7 +2028,7 @@
             }
             materialsConfig[matName].reusedActive = Boolean(isChecked && curLen > 0);
             renderMaterialsTable();
-            if (optimizationResult) runOptimization();
+            if (optimizationResult) scheduleOptimizationRun();
         }
 
         function toggleStockLength(matName, idx) {
@@ -2196,6 +2225,42 @@
             return `${prefix}${mName}${tName}${qTag}`.replace(/\s+/g, ' ').trim();
         }
 
+        let _optRunTimer = null;
+        function scheduleOptimizationRun() {
+            if (_optRunTimer) clearTimeout(_optRunTimer);
+            _optRunTimer = setTimeout(() => {
+                _optRunTimer = null;
+                try {
+                    runOptimization();
+                } catch (err) {
+                    console.error("Optimizer error:", err);
+                    showToast(`Optimizer error: ${err.message || err}`, 'error');
+                }
+            }, 0);
+        }
+
+        function onStrategyChange() {
+            const stratEl = document.getElementById('opt-strategy');
+            const wrapEl = document.getElementById('opt-stud-threshold-wrap');
+            const hintEl = document.getElementById('opt-strategy-hint');
+            const strat = stratEl ? stratEl.value : '';
+            if (wrapEl) {
+                wrapEl.classList.toggle('hidden', strat !== 'wall_frame_hybrid');
+            }
+            if (hintEl) {
+                if (strat === 'wall_frame_hybrid') {
+                    hintEl.textContent = 'Cuts CST, CTR, SCS, WST & CTS studs (plus pieces within max offcut) 1-to-1 from closest stock; nests remainder normally.';
+                } else if (strat === 'strict_closest_stock') {
+                    hintEl.textContent = 'Forces every piece 1-to-1 onto its smallest fitting active stock length.';
+                } else {
+                    hintEl.textContent = 'Prioritizes like member labels on consecutive boards.';
+                }
+            }
+            if (optimizationResult) {
+                requestAnimationFrame(() => scheduleOptimizationRun());
+            }
+        }
+
         // 1D Bin-Packing Optimizer Algorithm with 2-Board Stack Cutting (Stack 2 High), Like-Member Consecutive Board Priority & PSF Separation
         function runOptimization() {
             if (membersJsonData.length === 0) {
@@ -2332,6 +2397,28 @@
                     const maxActiveStock = fallbackStocks[0];
                     const isEconomicalMode = (strategy === 'economical_stack_2' || strategy === 'economical_single');
                     const isStack2Mode = (strategy === 'stack_2' || strategy === 'economical_stack_2');
+                    const isWallFrameHybrid = (strategy === 'wall_frame_hybrid');
+                    const isStrictClosestStock = (strategy === 'strict_closest_stock');
+                    const studMaxOffcutEl = document.getElementById('opt-stud-max-offcut');
+                    const studMaxOffcutMm = (studMaxOffcutEl && studMaxOffcutEl.value !== '') ? Math.max(0, Number(studMaxOffcutEl.value) || 0) : 200;
+
+                    function isWallFrameStudMember(m) {
+                        const txt = `${m.label || ''} ${m.member || ''} ${m.type || ''} ${m.ID || ''} ${m.name || ''} ${m.Name || ''}`;
+                        return /(?:^|[^A-Z0-9])(CST|CTR|SCS|WST|CTS)(?=$|[^A-Z])/i.test(txt) ||
+                               /\b(STUD|JAMB|JACK|CRIPPLE|KING|TRIMMER)\b/i.test(txt);
+                    }
+
+                    function getSmallestFittingStock(usedLen, stockCandidates = fallbackStocks, useCap = false) {
+                        for (let sIdx = stockCandidates.length - 1; sIdx >= 0; sIdx--) {
+                            const cand = stockCandidates[sIdx];
+                            if (cand >= usedLen) {
+                                if (!useCap || (remHubForMat[cand] || 0) >= 1) {
+                                    return cand;
+                                }
+                            }
+                        }
+                        return null;
+                    }
 
                     // Helper: Dollar cost for a single board of length `stockLenMm` of material `mat`
                     function getSingleBoardDollarCost(stockLenMm) {
@@ -2877,12 +2964,126 @@
                                 }
                             });
 
-                            if (forceFixedStock || strategy === 'economical_single' || strategy === 'like_member' || strategy === 'bfd' || strategy === 'ffd' || strategy === 'largest') {
+                            if (forceFixedStock || strategy === 'economical_single' || strategy === 'like_member' || strategy === 'bfd' || strategy === 'largest' || isWallFrameHybrid || isStrictClosestStock) {
                                 members.sort((a, b) => {
                                     if (b.lengthNormalized !== a.lengthNormalized) return b.lengthNormalized - a.lengthNormalized;
                                     if (a._sourceIndex !== b._sourceIndex) return (a._sourceIndex || 0) - (b._sourceIndex || 0);
                                     return a._pieceNumber - b._pieceNumber;
                                 });
+                            }
+
+                            if (!forceFixedStock && isStrictClosestStock) {
+                                let strictBins = [];
+                                const useCap = Boolean(hubCapActiveForMat);
+                                members.forEach(member => {
+                                    const initUsed = member.lengthNormalized + memberSpacing;
+                                    if (initUsed > passMaxStock) {
+                                        oversizedMembers.push({
+                                            material: mat,
+                                            label: member.label || member.member || member.ID || 'Member',
+                                            truss: member.truss || '',
+                                            length: Math.round(member.lengthNormalized),
+                                            requiredLength: Math.round(initUsed),
+                                            maxStock: passMaxStock,
+                                            qty: 1
+                                        });
+                                        return;
+                                    }
+                                    let chosenStock = getSmallestFittingStock(initUsed, passStocks, useCap);
+                                    let isShortfall = false;
+                                    if (chosenStock === null) {
+                                        chosenStock = getSmallestFittingStock(initUsed, passStocks, false);
+                                        if (chosenStock === null) {
+                                            oversizedMembers.push({
+                                                material: mat,
+                                                label: member.label || member.member || member.ID || 'Member',
+                                                truss: member.truss || '',
+                                                length: Math.round(member.lengthNormalized),
+                                                requiredLength: Math.round(initUsed),
+                                                maxStock: passMaxStock,
+                                                qty: 1
+                                            });
+                                            return;
+                                        }
+                                        isShortfall = true;
+                                        if (!stockHubShortfalls[mat]) stockHubShortfalls[mat] = {};
+                                        stockHubShortfalls[mat][chosenStock] = (stockHubShortfalls[mat][chosenStock] || 0) + 1;
+                                    } else if (useCap) {
+                                        remHubForMat[chosenStock] = Math.max(0, (remHubForMat[chosenStock] || 0) - 1);
+                                    }
+                                    strictBins.push({
+                                        stackCount: 1,
+                                        stockLength: chosenStock,
+                                        usedLength: initUsed,
+                                        cuts: [member],
+                                        remnant: chosenStock - initUsed,
+                                        isReuseBoard: false,
+                                        isShortfall: isShortfall
+                                    });
+                                });
+                                return { passBins: strictBins, passPhysicalCount };
+                            }
+
+                            if (!forceFixedStock && isWallFrameHybrid) {
+                                let closestBins = [];
+                                let remainderPool = [];
+                                const useCap = Boolean(hubCapActiveForMat);
+
+                                members.forEach(member => {
+                                    const initUsed = member.lengthNormalized + memberSpacing;
+                                    if (initUsed > passMaxStock) {
+                                        oversizedMembers.push({
+                                            material: mat,
+                                            label: member.label || member.member || member.ID || 'Member',
+                                            truss: member.truss || '',
+                                            length: Math.round(member.lengthNormalized),
+                                            requiredLength: Math.round(initUsed),
+                                            maxStock: passMaxStock,
+                                            qty: 1
+                                        });
+                                        return;
+                                    }
+                                    const closestAny = getSmallestFittingStock(initUsed, passStocks, false);
+                                    const closestRem = closestAny !== null ? (closestAny - initUsed) : Infinity;
+                                    const qualifiesForStud1to1 = (closestAny !== null) && (isWallFrameStudMember(member) || closestRem <= studMaxOffcutMm);
+
+                                    if (qualifiesForStud1to1) {
+                                        if (useCap) {
+                                            if ((remHubForMat[closestAny] || 0) >= 1) {
+                                                remHubForMat[closestAny] = Math.max(0, (remHubForMat[closestAny] || 0) - 1);
+                                                closestBins.push({
+                                                    stackCount: 1,
+                                                    stockLength: closestAny,
+                                                    usedLength: initUsed,
+                                                    cuts: [member],
+                                                    remnant: closestAny - initUsed,
+                                                    isReuseBoard: false,
+                                                    isShortfall: false
+                                                });
+                                            } else {
+                                                // Closest stud stock length exhausted in $tock Hub -> fall through to normal nesting
+                                                remainderPool.push(member);
+                                            }
+                                        } else {
+                                            closestBins.push({
+                                                stackCount: 1,
+                                                stockLength: closestAny,
+                                                usedLength: initUsed,
+                                                cuts: [member],
+                                                remnant: closestAny - initUsed,
+                                                isReuseBoard: false,
+                                                isShortfall: false
+                                            });
+                                        }
+                                    } else {
+                                        remainderPool.push(member);
+                                    }
+                                });
+
+                                let nestedBins = remainderPool.length > 0
+                                    ? packUnitsIntoBins(remainderPool, 1, true, passStocks, false)
+                                    : [];
+                                return { passBins: closestBins.concat(nestedBins), passPhysicalCount };
                             }
 
                             const useLike = forceFixedStock || strategy === 'like_member' || strategy === 'economical_single';
@@ -3149,6 +3350,10 @@
                 showToast(`Economical Single-Board complete: ${totalBoardsCount} boards | Total Cost: ${costStr}!`);
             } else if (strategy === 'stack_2') {
                 showToast(`2-Board Stack Optimization complete: ${totalBoardsCount} boards in ${allOptimizedBoards.length} saw runs (${totalStackedRuns} stacked 2-high)!`);
+            } else if (strategy === 'wall_frame_hybrid') {
+                showToast(`Wall Frame Hybrid complete: ${totalBoardsCount} boards (studs matched 1-to-1 to closest stock, remainder nested)!`);
+            } else if (strategy === 'strict_closest_stock') {
+                showToast(`Strict Closest Stock complete: ${totalBoardsCount} boards (1 piece per closest stock length)!`);
             } else if (limitN) {
                 showToast(`Optimized across ${trussBatches.length} truss batch group(s) of ${limitN}!`);
             } else {
@@ -3385,11 +3590,35 @@
 
                 loadedZip.file("members.json", JSON.stringify(exportData, null, 2));
                 const content = await loadedZip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-                
+                const outFileName = currentFileName.replace(/\.[^/.]+$/, "") + "_optimized.psf";
+
+                // If the operator nominated an export target folder, write directly into it
+                if (psfExportDirHandle) {
+                    try {
+                        let perm = await psfExportDirHandle.queryPermission({ mode: 'readwrite' });
+                        if (perm !== 'granted') {
+                            perm = await psfExportDirHandle.requestPermission({ mode: 'readwrite' });
+                        }
+                        if (perm === 'granted') {
+                            const fileHandle = await psfExportDirHandle.getFileHandle(outFileName, { create: true });
+                            const writable = await fileHandle.createWritable();
+                            await writable.write(content);
+                            await writable.close();
+                            showToast(`Saved ${outFileName} directly to folder "${psfExportDirHandle.name}" (${exportMembersArray.length} ordered entries)!`);
+                            return;
+                        } else {
+                            showToast(`Folder permission denied for "${psfExportDirHandle.name}". Falling back to browser download.`, 'error');
+                        }
+                    } catch (folderErr) {
+                        console.warn("Direct folder export failed, falling back to browser download:", folderErr);
+                        showToast(`Could not write to "${psfExportDirHandle.name}" — falling back to browser download.`, 'error');
+                    }
+                }
+
                 const downloadUrl = URL.createObjectURL(content);
                 const a = document.createElement('a');
                 a.href = downloadUrl;
-                a.download = currentFileName.replace(/\.[^/.]+$/, "") + "_optimized.psf";
+                a.download = outFileName;
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
@@ -3400,6 +3629,98 @@
                 console.error(err);
                 showToast("Failed to generate PSF file export.", 'error');
             }
+        }
+
+        // Nominated .PSF Export Target Folder Management (File System Access API + IndexedDB)
+        let psfExportDirHandle = null;
+        const PSF_EXPORT_DB_NAME = 'pba_optimizer_psf_export_db';
+        const PSF_EXPORT_STORE_NAME = 'handles';
+        const PSF_EXPORT_HANDLE_KEY = 'psf_export_dir';
+
+        function openPsfExportHandleDb() {
+            return new Promise((resolve) => {
+                if (!window.indexedDB) { resolve(null); return; }
+                const req = indexedDB.open(PSF_EXPORT_DB_NAME, 1);
+                req.onupgradeneeded = () => {
+                    const db = req.result;
+                    if (!db.objectStoreNames.contains(PSF_EXPORT_STORE_NAME)) {
+                        db.createObjectStore(PSF_EXPORT_STORE_NAME);
+                    }
+                };
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        async function savePsfExportDirHandle(handle) {
+            try {
+                const db = await openPsfExportHandleDb();
+                if (!db) return;
+                await new Promise((resolve) => {
+                    const tx = db.transaction(PSF_EXPORT_STORE_NAME, 'readwrite');
+                    if (handle) tx.objectStore(PSF_EXPORT_STORE_NAME).put(handle, PSF_EXPORT_HANDLE_KEY);
+                    else tx.objectStore(PSF_EXPORT_STORE_NAME).delete(PSF_EXPORT_HANDLE_KEY);
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => resolve();
+                });
+            } catch (e) {}
+        }
+
+        async function loadPsfExportDirHandle() {
+            try {
+                const db = await openPsfExportHandleDb();
+                if (!db) return null;
+                return await new Promise((resolve) => {
+                    const tx = db.transaction(PSF_EXPORT_STORE_NAME, 'readonly');
+                    const req = tx.objectStore(PSF_EXPORT_STORE_NAME).get(PSF_EXPORT_HANDLE_KEY);
+                    req.onsuccess = () => resolve(req.result || null);
+                    req.onerror = () => resolve(null);
+                });
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function updatePsfExportFolderUI() {
+            const folderLbl = document.getElementById('psf-folder-label');
+            const clearBtn = document.getElementById('btn-psf-clear-folder');
+            const exportLbl = document.getElementById('btn-export-psf-label');
+            if (psfExportDirHandle) {
+                if (folderLbl) folderLbl.textContent = `Folder: ${psfExportDirHandle.name}`;
+                if (clearBtn) clearBtn.classList.remove('hidden');
+                if (exportLbl) exportLbl.textContent = 'Export .PSF to Folder';
+            } else {
+                if (folderLbl) folderLbl.textContent = 'Set PSF Folder';
+                if (clearBtn) clearBtn.classList.add('hidden');
+                if (exportLbl) exportLbl.textContent = 'Download Optimized .PSF';
+            }
+        }
+
+        async function selectPsfExportFolder() {
+            if (typeof window.showDirectoryPicker !== 'function') {
+                showToast("Folder selection requires Microsoft Edge or Google Chrome on localhost or HTTPS.", 'error');
+                return;
+            }
+            try {
+                const opts = { id: 'pba_psf_export_folder', mode: 'readwrite' };
+                if (psfExportDirHandle) opts.startIn = psfExportDirHandle;
+                const handle = await window.showDirectoryPicker(opts);
+                psfExportDirHandle = handle;
+                await savePsfExportDirHandle(handle);
+                updatePsfExportFolderUI();
+                showToast(`PSF export target folder set to "${handle.name}".`);
+            } catch (err) {
+                if (err && err.name === 'AbortError') return;
+                console.error(err);
+                showToast("Could not select export folder: " + (err.message || err), 'error');
+            }
+        }
+
+        async function clearPsfExportFolder() {
+            psfExportDirHandle = null;
+            await savePsfExportDirHandle(null);
+            updatePsfExportFolderUI();
+            showToast("Cleared nominated PSF folder. Exports will use default Downloads.");
         }
 
         // Export Excel Cutting Schedule (.xlsx)
@@ -3715,6 +4036,7 @@
                 materialsConfig = {};
                 optimizationResult = null;
                 currentFileName = "";
+                customStockHubOrderNumber = "";
                 stockDrawSent = false;
                 updateSendStockHubButtonState();
 
@@ -4140,7 +4462,75 @@
             }
         }
 
-        async function sendStockDrawToStockHub(forceOverride = false) {
+        function applyStockHubOrderSuffix(suffix) {
+            const inp = document.getElementById('stockhub-order-number-input');
+            if (!inp) return;
+            let val = inp.value.trim();
+            val = val.replace(/[-_\s](R|W|F)$/i, '');
+            inp.value = val ? `${val}${suffix}` : suffix;
+            inp.focus();
+        }
+
+        function openSendStockHubModal(defaultJobLabel, items) {
+            return new Promise((resolve) => {
+                const modal = document.getElementById('sendStockHubModal');
+                const inp = document.getElementById('stockhub-order-number-input');
+                const previewEl = document.getElementById('stockhub-draw-preview');
+                const countEl = document.getElementById('stockhub-draw-line-count');
+                const errEl = document.getElementById('stockhub-order-error');
+                const cancelBtn = document.getElementById('sendStockHubCancelBtn');
+                const confirmBtn = document.getElementById('sendStockHubConfirmBtn');
+
+                inp.value = customStockHubOrderNumber || defaultJobLabel || '';
+                if (countEl) countEl.textContent = `${items.length} timber line(s)`;
+                if (errEl) {
+                    errEl.textContent = '';
+                    errEl.classList.add('hidden');
+                }
+                if (previewEl) {
+                    previewEl.innerHTML = items.map(it =>
+                        `<div class="flex items-center justify-between py-1.5 border-b border-slate-800/80 last:border-b-0 text-xs">
+                            <span class="font-semibold text-slate-200">${it.product_code} <span class="text-slate-400 font-normal">@ ${it.stock_length}mm</span></span>
+                            <span class="font-mono font-bold text-sky-400">${it.quantity}x</span>
+                        </div>`
+                    ).join('');
+                }
+
+                modal.style.display = 'flex';
+                setTimeout(() => { inp.focus(); inp.select(); }, 40);
+
+                const cleanup = (val) => {
+                    modal.style.display = 'none';
+                    cancelBtn.onclick = null;
+                    confirmBtn.onclick = null;
+                    inp.onkeydown = null;
+                    resolve(val);
+                };
+
+                const handleConfirm = () => {
+                    const cleaned = inp.value.trim();
+                    if (!cleaned) {
+                        if (errEl) {
+                            errEl.textContent = 'Please enter an Order / Job Number before sending to $tock Hub.';
+                            errEl.classList.remove('hidden');
+                        }
+                        inp.focus();
+                        return;
+                    }
+                    customStockHubOrderNumber = cleaned;
+                    cleanup(cleaned);
+                };
+
+                cancelBtn.onclick = () => cleanup(null);
+                confirmBtn.onclick = handleConfirm;
+                inp.onkeydown = (ev) => {
+                    if (ev.key === 'Enter') { ev.preventDefault(); handleConfirm(); }
+                    else if (ev.key === 'Escape') { ev.preventDefault(); cleanup(null); }
+                };
+            });
+        }
+
+        async function sendStockDrawToStockHub(forceOverride = false, overrideJobLabel = null) {
             if (!optimizationResult || !optimizationResult.boards || optimizationResult.boards.length === 0) {
                 showToast("Please run the optimizer first before sending stock draw.", "error");
                 return;
@@ -4167,13 +4557,15 @@
             });
 
             const items = Object.values(drawMap);
-            const jobLabel = currentFileName ? currentFileName.replace(/\.[^/.]+$/, "") : "Manual Run";
-            const previewLines = items.map(it => `• ${it.quantity}x ${it.product_code} @ ${it.stock_length}mm`).join("\n");
+            const defaultJobLabel = currentFileName ? currentFileName.replace(/\.[^/.]+$/, "") : "Manual Run";
+            let jobLabel = overrideJobLabel || customStockHubOrderNumber || defaultJobLabel;
 
             if (!forceOverride) {
-                if (!confirm(`Deduct ${items.length} timber line(s) for job "${jobLabel}" from $tock Hub and record in Production Orders?\n\n${previewLines}`)) {
+                const editedOrderNum = await openSendStockHubModal(defaultJobLabel, items);
+                if (!editedOrderNum) {
                     return;
                 }
+                jobLabel = editedOrderNum;
             }
 
             const btn = document.getElementById('btn-send-stock-hub');
@@ -4225,7 +4617,7 @@
                         forceBtn.onclick = () => cleanup(true);
                     });
                     if (forceConfirmed) {
-                        return sendStockDrawToStockHub(true);
+                        return sendStockDrawToStockHub(true, jobLabel);
                     }
                     showToast(`Sync cancelled — Job "${jobLabel}" is already recorded in Production Orders (#${data.existing_order_id}).`, "error");
                     return;
@@ -4400,12 +4792,70 @@
             }
         }
 
-        // Auto-connect to $tock Hub on page load
-        window.addEventListener('DOMContentLoaded', () => {
+        // Auto-connect to $tock Hub on page load and re-sync when returning to this browser tab
+        window.addEventListener('DOMContentLoaded', async () => {
             syncStockFromStockHub(true);
+            psfExportDirHandle = await loadPsfExportDirHandle();
+            updatePsfExportFolderUI();
+        });
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                syncStockFromStockHub(true).then(() => {
+                    if (optimizationResult) calculateTimberCosts(true);
+                });
+            }
         });
 
 </script>
+
+    <!-- Send Stock Draw to $tock Hub Modal (with Editable Order Number) -->
+    <div id="sendStockHubModal" style="display:none; position:fixed; inset:0; z-index:99998; background:rgba(2,6,23,0.78); backdrop-filter:blur(4px); align-items:center; justify-content:center; padding:16px;">
+        <div class="bg-slate-900 border border-sky-500/40 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden">
+            <div class="bg-slate-950 border-b border-slate-800 px-6 py-4 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-9 h-9 rounded-xl bg-sky-600/20 border border-sky-500/40 text-sky-400 flex items-center justify-center">
+                        <i class="fa-solid fa-cloud-arrow-up"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-base font-bold text-white">Send Stock Draw to $tock Hub</h3>
+                        <p class="text-xs text-slate-400">Review or modify the Order / Job Number before deducting stock</p>
+                    </div>
+                </div>
+            </div>
+            <div class="p-6 space-y-4">
+                <div class="space-y-1.5">
+                    <div class="flex items-center justify-between">
+                        <label for="stockhub-order-number-input" class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Order / Job Number</label>
+                        <div class="flex items-center space-x-1">
+                            <span class="text-[11px] text-slate-500 mr-1">Quick Suffix:</span>
+                            <button type="button" onclick="applyStockHubOrderSuffix('-R')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-red-600/80 text-slate-200 text-[11px] font-bold border border-slate-700 transition-colors" title="Roof job suffix">-R</button>
+                            <button type="button" onclick="applyStockHubOrderSuffix('-W')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-sky-600/80 text-slate-200 text-[11px] font-bold border border-slate-700 transition-colors" title="Wall job suffix">-W</button>
+                            <button type="button" onclick="applyStockHubOrderSuffix('-F')" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-emerald-600/80 text-slate-200 text-[11px] font-bold border border-slate-700 transition-colors" title="Floor job suffix">-F</button>
+                        </div>
+                    </div>
+                    <input type="text" id="stockhub-order-number-input" placeholder="e.g. 753273-W" autocomplete="off" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm font-semibold text-white focus:outline-none focus:border-sky-500">
+                    <p id="stockhub-order-error" class="hidden text-xs text-red-400 font-medium pt-1"></p>
+                </div>
+
+                <div class="bg-slate-950 border border-slate-800 rounded-xl p-3.5 space-y-2">
+                    <div class="flex items-center justify-between text-xs">
+                        <span class="font-semibold text-slate-400 uppercase tracking-wider">Timber Stock Draw Summary</span>
+                        <span id="stockhub-draw-line-count" class="text-sky-400 font-semibold">0 lines</span>
+                    </div>
+                    <div id="stockhub-draw-preview" class="max-h-48 overflow-y-auto pr-1"></div>
+                </div>
+            </div>
+            <div class="bg-slate-950 border-t border-slate-800 px-6 py-3.5 flex items-center justify-end space-x-3">
+                <button type="button" id="sendStockHubCancelBtn" class="bg-slate-800 hover:bg-slate-700 text-white font-medium px-4 py-2 rounded-xl text-sm border border-slate-700">
+                    Cancel
+                </button>
+                <button type="button" id="sendStockHubConfirmBtn" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-5 py-2 rounded-xl text-sm shadow-lg shadow-sky-600/20 flex items-center space-x-2">
+                    <i class="fa-solid fa-check"></i>
+                    <span>Confirm &amp; Send to $tock Hub</span>
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- Server-Side Duplicate-Job Protection Warning Modal -->
     <div id="duplicateJobModal" style="display:none; position:fixed; inset:0; z-index:99999; background:rgba(0,0,0,0.68); align-items:center; justify-content:center; padding:16px;">
